@@ -1,0 +1,137 @@
+<form class="rs-damage-splats-config">
+  <p class="notes">
+    Set an image path for each splat type, then use <strong>Test Splat</strong> to preview the real result on a token.
+    If no image is set, the module falls back to the normal regular or crit splat.
+  </p>
+
+  <div class="rsds-table-scroll">
+    <div class="rsds-table">
+      <div class="rsds-row rsds-head">
+        <div class="rsds-col-type">Type</div>
+        <div class="rsds-col-toggle">Enabled</div>
+        <div class="rsds-col-image">Image Path</div>
+        <div class="rsds-col-toggle">Sound</div>
+        <div class="rsds-col-sound">Sound Path</div>
+        <div class="rsds-col-color">Text</div>
+        <div class="rsds-col-color">Tint</div>
+        <div class="rsds-col-actions">Actions</div>
+      </div>
+
+      {{#each rows}}
+      <div class="rsds-row" data-type="{{type}}" data-label="{{label}}">
+        <div class="rsds-type">
+          <strong>{{label}}</strong>
+          <div class="notes"><code>{{type}}</code></div>
+        </div>
+
+      <div class="rsds-enabled">
+        <label class="rsds-inline-option">
+          <input
+            type="checkbox"
+            name="styles.{{type}}.enabled"
+            aria-label="Enable {{label}} splat"
+            {{#if enabled}}checked{{/if}}
+          />
+          <span class="rsds-inline-option-label">Enabled</span>
+        </label>
+      </div>
+
+        <div class="rsds-image">
+          <input
+            type="text"
+            name="styles.{{type}}.image"
+            value="{{image}}"
+            spellcheck="false"
+            placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
+          />
+          <div class="notes rsds-image-hint" data-role="image-hint">
+            <strong>Tint</strong> uses the tint-base splat for this row instead of the image path.
+          </div>
+        </div>
+
+      <div class="rsds-sound-enabled">
+        <label class="rsds-inline-option">
+          <input
+            type="checkbox"
+            name="styles.{{type}}.soundEnabled"
+            aria-label="Enable {{label}} sound"
+            {{#if soundEnabled}}checked{{/if}}
+          />
+          <span class="rsds-inline-option-label">Sound</span>
+        </label>
+      </div>
+
+        <div class="rsds-sound">
+          <input
+            type="text"
+            name="styles.{{type}}.sound"
+            value="{{sound}}"
+            spellcheck="false"
+            placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
+          />
+        </div>
+
+        <div class="rsds-text">
+          <label class="rsds-color-control" title="Use a custom text color">
+            <input
+              type="checkbox"
+              class="rsds-color-toggle"
+              name="styles.{{type}}.textEnabled"
+              {{#if text}}checked{{/if}}
+            />
+            <span class="rsds-color-label">Text</span>
+          </label>
+          <input
+            type="color"
+            class="rsds-color-input"
+            name="styles.{{type}}.text"
+            value="{{#if text}}{{text}}{{else}}#FFF7BD{{/if}}"
+            data-default-color="#FFF7BD"
+            aria-label="{{label}} text color"
+          />
+        </div>
+
+        <div class="rsds-tint">
+          <label class="rsds-color-control" title="Use a custom splat tint">
+            <input
+              type="checkbox"
+              class="rsds-color-toggle"
+              name="styles.{{type}}.tintEnabled"
+              {{#if tint}}checked{{/if}}
+            />
+            <span class="rsds-color-label">Tint</span>
+          </label>
+          <input
+            type="color"
+            class="rsds-color-input"
+            name="styles.{{type}}.tint"
+            value="{{#if tint}}{{tint}}{{else}}#FF0000{{/if}}"
+            data-default-color="#FF0000"
+            aria-label="{{label}} tint color"
+          />
+        </div>
+
+        <div class="rsds-actions">
+          <button type="button" data-action="preview" data-type="{{type}}" data-amount="{{previewAmount}}">
+            Test Splat
+          </button>
+          <button type="button" data-action="reset" data-type="{{type}}">
+            Reset
+          </button>
+        </div>
+      </div>
+      {{/each}}
+    </div>
+  </div>
+
+  <div class="form-group">
+    <button type="button" data-action="apply">
+      <i class="fas fa-check"></i>
+      Apply Styles
+    </button>
+    <button type="submit" data-action="save">
+      <i class="fas fa-save"></i>
+      Save Styles
+    </button>
+  </div>
+</form>

@@ -1,0 +1,252 @@
+/* Foundry loads this file with the module, even though the current effect is PIXI-based.
+   Keeping the font-face here makes the font easier to inspect in the browser if needed. */
+@font-face {
+  font-family: "RuneScape Bold";
+  src: url("../assets/runescape_bold.ttf") format("truetype");
+  font-display: swap;
+}
+
+.rsds-config-window .window-content {
+  overflow: auto;
+}
+
+.rs-damage-splats-config .rsds-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rs-damage-splats-config {
+  display: block;
+}
+
+.rs-damage-splats-config .rsds-table-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-right: 6px;
+  padding-bottom: 4px;
+  margin-top: 12px;
+}
+
+.rs-damage-splats-config .rsds-row {
+  display: grid;
+  min-width: 1300px;
+  grid-template-columns: minmax(140px, 1.2fr) 68px minmax(250px, 2.3fr) 68px minmax(250px, 2.3fr) minmax(124px, 0.95fr) minmax(124px, 0.95fr) minmax(190px, 1.15fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.rs-damage-splats-config .rsds-head {
+  font-weight: 700;
+  border-bottom: 1px solid var(--color-border-light-primary);
+  padding: 0 0 8px;
+  align-items: end;
+}
+
+.rs-damage-splats-config .rsds-row input[type="text"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.rs-damage-splats-config .rsds-type {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.rs-damage-splats-config .rsds-type .notes {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.rs-damage-splats-config .rsds-image {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.rs-damage-splats-config .rsds-image-hint {
+  display: none;
+  margin: 4px 0 0;
+  line-height: 1.2;
+}
+
+.rs-damage-splats-config .rsds-row.rsds-uses-tint-base .rsds-image-hint {
+  display: block;
+}
+
+.rs-damage-splats-config .rsds-type code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.rs-damage-splats-config .rsds-enabled,
+.rs-damage-splats-config .rsds-sound-enabled {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.rs-damage-splats-config .rsds-inline-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.rs-damage-splats-config .rsds-inline-option-label {
+  display: none;
+  font-size: 12px;
+}
+
+.rs-damage-splats-config .rsds-image,
+.rs-damage-splats-config .rsds-sound,
+.rs-damage-splats-config .rsds-text,
+.rs-damage-splats-config .rsds-tint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rs-damage-splats-config .rsds-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.rs-damage-splats-config .rsds-color-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.rs-damage-splats-config .rsds-color-label {
+  font-size: 12px;
+}
+
+.rs-damage-splats-config .rsds-color-input {
+  width: 40px;
+  min-width: 40px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.rs-damage-splats-config .rsds-color-input:disabled {
+  opacity: 0.45;
+}
+
+.rs-damage-splats-config .rsds-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.rs-damage-splats-config .rsds-actions button {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.rs-damage-splats-config .form-group {
+  margin-top: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-light-primary);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rs-damage-splats-config .form-group button[type="submit"] {
+  min-width: 160px;
+}
+
+.rs-damage-splats-config .form-group button[data-action="apply"] {
+  min-width: 160px;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-row {
+  min-width: 1120px;
+  grid-template-columns: minmax(130px, 1.15fr) 62px minmax(210px, 2fr) 62px minmax(210px, 2fr) minmax(112px, 0.9fr) minmax(112px, 0.9fr) minmax(170px, 1fr);
+  gap: 8px;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-actions button {
+  width: 100%;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-color-label {
+  display: inline;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-color-input {
+  width: 34px;
+  min-width: 34px;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-inline-option-label,
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-inline-option-label {
+  display: inline;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-table {
+  gap: 12px;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-head {
+  display: none;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-row {
+  min-width: 0;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 10px 0 14px;
+  border-bottom: 1px solid var(--color-border-light-primary);
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-enabled,
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-sound-enabled {
+  justify-content: flex-start;
+  padding-top: 0;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-actions {
+  flex-direction: row;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .form-group {
+  flex-direction: column;
+}
+
+@media (max-width: 1100px) {
+  .rs-damage-splats-config .rsds-table {
+    gap: 12px;
+  }
+
+  .rs-damage-splats-config .rsds-head {
+    display: none;
+  }
+
+  .rs-damage-splats-config .rsds-row {
+    min-width: 0;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px 0 14px;
+    border-bottom: 1px solid var(--color-border-light-primary);
+  }
+
+  .rs-damage-splats-config .rsds-enabled,
+  .rs-damage-splats-config .rsds-sound-enabled {
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+}
