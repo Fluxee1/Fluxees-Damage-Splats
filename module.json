@@ -30,6 +30,6 @@
     ]
   },
   "url": "https://github.com/Fluxee1/Fluxees-Damage-Splats",
-  "manifest": "",
-  "download": ""
+  "manifest": "https://github.com/Fluxee1/Fluxees-Damage-Splats/blob/main/module.json",
+  "download": "https://github.com/Fluxee1/Fluxees-Damage-Splats/archive/refs/heads/main.zip"
 }
