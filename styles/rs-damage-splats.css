@@ -3,6 +3,8 @@
 @font-face {
   font-family: "RuneScape Bold";
   src: url("../assets/runescape_bold.ttf") format("truetype");
+  font-family: "RuneScape UF";
+  src: url("../assets/runescape_uf.ttf") format("truetype");
   font-display: swap;
 }
 
@@ -46,6 +48,28 @@
 .rs-damage-splats-config .rsds-row input[type="text"] {
   width: 100%;
   min-width: 0;
+}
+
+.rs-damage-splats-config .rsds-path-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.rs-damage-splats-config .rsds-path-field input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rs-damage-splats-config .rsds-browse-button {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  white-space: nowrap;
+  text-align: center;
+  font-weight: 700;
 }
 
 .rs-damage-splats-config .rsds-type {
@@ -179,6 +203,16 @@
   align-items: stretch;
 }
 
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-path-field {
+  gap: 4px;
+}
+
+.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-browse-button {
+  flex-basis: 28px;
+  width: 28px;
+  min-width: 28px;
+}
+
 .rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-actions button {
   width: 100%;
 }
@@ -221,6 +255,10 @@
 
 .rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-actions {
   flex-direction: row;
+}
+
+.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-path-field {
+  gap: 6px;
 }
 
 .rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .form-group {

@@ -3,6 +3,10 @@
     Set an image path for each splat type, then use <strong>Test Splat</strong> to preview the real result on a token.
     If no image is set, the module falls back to the normal regular or crit splat.
   </p>
+  <p class="notes">
+    Use the <strong>...</strong> picker buttons to choose custom images and sounds from Foundry's file storage.
+    Do <strong>not</strong> upload your custom files into this module's <code>assets</code> folder, because module updates can delete them.
+  </p>
 
   <div class="rsds-table-scroll">
     <div class="rsds-table">
@@ -37,13 +41,25 @@
       </div>
 
         <div class="rsds-image">
-          <input
-            type="text"
-            name="styles.{{type}}.image"
-            value="{{image}}"
-            spellcheck="false"
-            placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
-          />
+          <div class="rsds-path-field">
+            <input
+              type="text"
+              name="styles.{{type}}.image"
+              value="{{image}}"
+              spellcheck="false"
+              placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
+            />
+            <button
+              type="button"
+              class="rsds-browse-button"
+              data-action="browse-image"
+              data-target='[name="styles.{{type}}.image"]'
+              title="Browse for an image file"
+              aria-label="Browse for an image file"
+            >
+              ...
+            </button>
+          </div>
           <div class="notes rsds-image-hint" data-role="image-hint">
             <strong>Tint</strong> uses the tint-base splat for this row instead of the image path.
           </div>
@@ -62,13 +78,25 @@
       </div>
 
         <div class="rsds-sound">
-          <input
-            type="text"
-            name="styles.{{type}}.sound"
-            value="{{sound}}"
-            spellcheck="false"
-            placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
-          />
+          <div class="rsds-path-field">
+            <input
+              type="text"
+              name="styles.{{type}}.sound"
+              value="{{sound}}"
+              spellcheck="false"
+              placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
+            />
+            <button
+              type="button"
+              class="rsds-browse-button"
+              data-action="browse-sound"
+              data-target='[name="styles.{{type}}.sound"]'
+              title="Browse for an audio file"
+              aria-label="Browse for an audio file"
+            >
+              ...
+            </button>
+          </div>
         </div>
 
         <div class="rsds-text">

@@ -1,6 +1,6 @@
 # Fluxee's Damage Splats
 
-This Foundry VTT module shows RuneScape-style splats when actors lose or regain HP.
+This Module shows RuneScape-style splats when actors lose or regain HP.
 
 It supports:
 
@@ -42,13 +42,17 @@ Put your splat art and font in the module `assets` folder.
 
 Expected defaults:
 
-- `assets/RegularSplat.webp`
-- `assets/HealSplat.webp`
-- `assets/TempHPSplat.webp`
+- `assets/regularsplat.webp`
+- `assets/healsplat.webp`
+- `assets/temphpsplat.webp`
+- `assets/splattint.webp`
+- `assets/healtint.webp`
 - `assets/rssplathit.ogg`
-- `assets/runescape_bold.ttf`
+- `assets/runescape_uf.ttf`
 
 Typed splats can point at any image path you enter in the settings form.
+
+For custom splat images or sounds, store them in Foundry's normal file storage, not inside this module's `assets` folder. Module updates can overwrite or delete files placed inside the module folder.
 
 ## Dependencies
 
@@ -100,8 +104,10 @@ Each row has:
 
 - enable toggle
 - image path
+- image browse button
 - sound toggle
 - sound path
+- sound browse button
 - text color
 - tint
 - `Test Splat`
@@ -156,7 +162,7 @@ When temporary HP changes:
 
 ## Release notes
 
-Version `1.0.0` includes:
+Version `1.0.1` includes:
 
 - synchronized client splats through `socketlib`
 - typed damage support for player and GM workflows

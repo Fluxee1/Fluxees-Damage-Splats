@@ -14,13 +14,13 @@ const DEFAULT_TEMP_HP_PATHS = [
   "system.hitPoints.temp",
   "system.resources.hp.temp"
 ];
-const DEFAULT_REGULAR_SPLAT = "modules/rs-damage-splats/assets/RegularSplat.webp";
-const DEFAULT_HEAL_SPLAT = "modules/rs-damage-splats/assets/HealSplat.webp";
-const DEFAULT_TEMP_HP_SPLAT = "modules/rs-damage-splats/assets/TempHPSplat.webp";
-const DEFAULT_TINT_SPLAT = "modules/rs-damage-splats/assets/SplatTint.webp";
-const DEFAULT_HEAL_TINT_SPLAT = "modules/rs-damage-splats/assets/HealTint.webp";
+const DEFAULT_REGULAR_SPLAT = "modules/rs-damage-splats/assets/regularsplat.webp";
+const DEFAULT_HEAL_SPLAT = "modules/rs-damage-splats/assets/healsplat.webp";
+const DEFAULT_TEMP_HP_SPLAT = "modules/rs-damage-splats/assets/temphpsplat.webp";
+const DEFAULT_TINT_SPLAT = "modules/rs-damage-splats/assets/splattint.webp";
+const DEFAULT_HEAL_TINT_SPLAT = "modules/rs-damage-splats/assets/healtint.webp";
 const DEFAULT_SPLAT_SOUND = "modules/rs-damage-splats/assets/rssplathit.ogg";
-const DEFAULT_FONT_PATH = "modules/rs-damage-splats/assets/runescape_bold.ttf";
+const DEFAULT_FONT_PATH = "modules/rs-damage-splats/assets/runescape_uf.ttf";
 const PENDING_TYPED_DAMAGE_TTL_MS = 15000;
 const TYPE_ORDER = [
   "heal",
@@ -306,7 +306,7 @@ function registerSettings() {
     scope: "world",
     config: true,
     type: String,
-    default: "RuneScape Bold"
+    default: "RuneScape UF"
   });
 
   game.settings.register(MODULE_ID, "damageTypeStyles", {
@@ -2199,6 +2199,16 @@ class DamageTypeStylesConfig extends FormApplication {
       this._syncTintBaseHints();
     });
 
+    html.find("[data-action='browse-image']").on("click", async (event) => {
+      event.preventDefault();
+      await this._browseForPath(event.currentTarget, "image");
+    });
+
+    html.find("[data-action='browse-sound']").on("click", async (event) => {
+      event.preventDefault();
+      await this._browseForPath(event.currentTarget, "audio");
+    });
+
     html.find("[data-action='apply']").on("click", async (event) => {
       event.preventDefault();
       await this._saveStyles({ closeAfterSave: false });
@@ -2319,6 +2329,30 @@ class DamageTypeStylesConfig extends FormApplication {
       const tintEnabled = Boolean(row.querySelector(`[name="styles.${type}.tintEnabled"]`)?.checked);
       row.classList.toggle("rsds-uses-tint-base", tintEnabled);
     }
+  }
+
+  async _browseForPath(button, fileType) {
+    const inputSelector = button?.dataset?.target;
+    if (!inputSelector || !this.form) return;
+
+    const input = this.form.querySelector(inputSelector);
+    if (!input) return;
+
+    const current = String(input.value ?? "").trim();
+    const pickerType = fileType === "audio" ? "audio" : "image";
+    const currentDir = current.includes("/") ? current.split("/").slice(0, -1).join("/") : "";
+
+    const picker = new FilePicker({
+      type: pickerType,
+      current: currentDir,
+      callback: (path) => {
+        input.value = path;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+
+    await picker.render(true);
   }
 
   _collectStylesFromForm() {
