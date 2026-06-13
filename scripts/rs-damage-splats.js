@@ -2135,14 +2135,83 @@ function findPreviewToken() {
     ?? null;
 }
 
+function getPreviewKindForType(type) {
+  const normalizedType = normalizeDamageType(type);
+  if (normalizedType === "heal") return "heal";
+  if (normalizedType === "temp-hp") return "temp-hp";
+  return "damage";
+}
+
+function toCssHexColor(value, fallback = "#FFF7BD") {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `#${value.toString(16).padStart(6, "0").slice(-6)}`;
+  }
+
+  if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value.trim())) {
+    return value.trim();
+  }
+
+  return fallback;
+}
+
+function playPreviewSoundPath(soundPath) {
+  const src = String(soundPath ?? "").trim();
+  if (!src) return false;
+
+  const audioHelper = foundry?.audio?.AudioHelper ?? globalThis.AudioHelper;
+  if (!audioHelper?.play) {
+    console.warn(`${MODULE_ID} | Audio helper is not available for preview sound playback.`);
+    return false;
+  }
+
+  try {
+    const result = audioHelper.play({
+      src,
+      volume: 0.8,
+      autoplay: true,
+      loop: false
+    }, false);
+
+    if (result && typeof result.catch === "function") {
+      result.catch((error) => {
+        console.warn(`${MODULE_ID} | Could not play preview sound at ${src}`, error);
+      });
+    }
+
+    return true;
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not play preview sound at ${src}`, error);
+    return false;
+  }
+}
+
+const previewImageCache = new Map();
+
+function loadPreviewImage(path) {
+  const normalizedPath = String(path ?? "").trim();
+  if (!normalizedPath) return Promise.resolve(null);
+
+  if (previewImageCache.has(normalizedPath)) return previewImageCache.get(normalizedPath);
+
+  const promise = new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = normalizedPath;
+  });
+
+  previewImageCache.set(normalizedPath, promise);
+  return promise;
+}
+
 class DamageTypeStylesConfig extends FormApplication {
   static get defaultOptions() {
     return foundry.utils.mergeObject(super.defaultOptions, {
       id: `${MODULE_ID}-damage-type-styles`,
       title: "Fluxee's Damage Splats: Damage Type Styles",
       template: `modules/${MODULE_ID}/templates/damage-type-styles-config.html`,
-      width: 1500,
-      height: 860,
+      width: 1040,
+      height: 900,
       resizable: true,
       classes: ["rsds-config-window"],
       closeOnSubmit: false,
@@ -2162,23 +2231,42 @@ class DamageTypeStylesConfig extends FormApplication {
         if (indexB === -1) return -1;
         return indexA - indexB;
       })
-      .map(([type, style]) => ({
-        type,
-        label: style.label,
-        enabled: style.enabled,
-        image: style.image,
-        soundEnabled: style.soundEnabled,
-        sound: style.sound,
-        tint: style.tint,
-        text: style.text,
-        defaultImage: defaults[type]?.image ?? "",
-        defaultSoundEnabled: defaults[type]?.soundEnabled !== false,
-        defaultSound: defaults[type]?.sound ?? "",
-        defaultTint: defaults[type]?.tint ?? "",
-        defaultText: defaults[type]?.text ?? "",
-        defaultEnabled: defaults[type]?.enabled !== false,
-        previewAmount: type === "heal" ? 12 : 9
-      }));
+      .map(([type, style]) => {
+        const effectiveStyle = getDamageTypeStyle(type, styles);
+        const previewAmount = type === "heal" ? 12 : 9;
+        const previewPath = effectiveStyle.image || getFallbackSplatPath({ kind: getPreviewKindForType(type) });
+        const imageModeLabel = effectiveStyle.tint !== null
+          ? `Tint Base`
+          : (style.image ? "Custom Image" : "Fallback Image");
+        const soundPath = style.sound || game.settings.get(MODULE_ID, "defaultSplatSoundPath");
+        const soundModeLabel = style.soundEnabled
+          ? (style.sound ? "Custom Sound" : "Default Sound")
+          : "Sound Off";
+
+        return {
+          type,
+          label: style.label,
+          enabled: style.enabled,
+          image: style.image,
+          soundEnabled: style.soundEnabled,
+          sound: style.sound,
+          tint: style.tint,
+          text: style.text,
+          defaultImage: defaults[type]?.image ?? "",
+          defaultSoundEnabled: defaults[type]?.soundEnabled !== false,
+          defaultSound: defaults[type]?.sound ?? "",
+          defaultTint: defaults[type]?.tint ?? "",
+          defaultText: defaults[type]?.text ?? "",
+          defaultEnabled: defaults[type]?.enabled !== false,
+          previewAmount,
+          previewPath,
+          imageModeLabel,
+          soundModeLabel,
+          previewTextColor: toCssHexColor(effectiveStyle.textColor, "#FFF7BD"),
+          previewTintColor: toCssHexColor(effectiveStyle.tint, "#FF0000"),
+          soundPath
+        };
+      });
 
     return { rows };
   }
@@ -2187,16 +2275,12 @@ class DamageTypeStylesConfig extends FormApplication {
     super.activateListeners(html);
     this._setupResponsiveLayout();
     this._syncColorToggleStates();
-    this._syncTintBaseHints();
+    this._syncRowPreviews();
     this._closeAfterSave = false;
 
-    html.find(".rsds-color-toggle").on("change", () => {
+    html.find("input, select").on("input change", () => {
       this._syncColorToggleStates();
-      this._syncTintBaseHints();
-    });
-
-    html.find("[name$='.image']").on("input", () => {
-      this._syncTintBaseHints();
+      this._syncRowPreviews();
     });
 
     html.find("[data-action='browse-image']").on("click", async (event) => {
@@ -2216,6 +2300,11 @@ class DamageTypeStylesConfig extends FormApplication {
 
     html.find("[data-action='save']").on("click", () => {
       this._closeAfterSave = true;
+    });
+
+    html.find("[data-action='reset-all']").on("click", async (event) => {
+      event.preventDefault();
+      await this._resetAllRowsToDefaults();
     });
 
     html.find("[data-action='preview']").on("click", async (event) => {
@@ -2239,26 +2328,21 @@ class DamageTypeStylesConfig extends FormApplication {
       );
     });
 
+    html.find("[data-action='test-sound']").on("click", (event) => {
+      event.preventDefault();
+      const button = event.currentTarget;
+      const row = button.closest(".rsds-row[data-type]");
+      if (!row) return;
+      this._testSoundForRow(row);
+    });
+
     html.find("[data-action='reset']").on("click", (event) => {
       event.preventDefault();
       const button = event.currentTarget;
       const type = button.dataset.type;
-      const defaults = getDefaultDamageTypeStyles()[type];
-      if (!defaults) return;
-
       const row = this.form.querySelector(`.rsds-row[data-type="${type}"]`);
       if (!row) return;
-
-      row.querySelector(`[name="styles.${type}.enabled"]`).checked = defaults.enabled !== false;
-      row.querySelector(`[name="styles.${type}.image"]`).value = defaults.image ?? "";
-      row.querySelector(`[name="styles.${type}.soundEnabled"]`).checked = defaults.soundEnabled !== false;
-      row.querySelector(`[name="styles.${type}.sound"]`).value = defaults.sound ?? "";
-      row.querySelector(`[name="styles.${type}.tintEnabled"]`).checked = Boolean(defaults.tint);
-      row.querySelector(`[name="styles.${type}.textEnabled"]`).checked = Boolean(defaults.text);
-      row.querySelector(`[name="styles.${type}.tint"]`).value = defaults.tint || "#FF0000";
-      row.querySelector(`[name="styles.${type}.text"]`).value = defaults.text || "#FFF7BD";
-      this._syncColorToggleStates(row);
-      this._syncTintBaseHints(row);
+      this._resetRowToDefaults(row, type);
     });
   }
 
@@ -2321,13 +2405,114 @@ class DamageTypeStylesConfig extends FormApplication {
     }
   }
 
-  _syncTintBaseHints(scope = this.form) {
+  _syncRowPreviews(scope = this.form) {
     if (!scope) return;
 
+    const styleOverrides = this._collectStylesFromForm();
     for (const row of scope.matches?.(".rsds-row[data-type]") ? [scope] : scope.querySelectorAll(".rsds-row[data-type]")) {
       const type = normalizeDamageType(row.dataset.type);
-      const tintEnabled = Boolean(row.querySelector(`[name="styles.${type}.tintEnabled"]`)?.checked);
-      row.classList.toggle("rsds-uses-tint-base", tintEnabled);
+      const label = row.dataset.label ?? TYPE_LABELS[type] ?? toTitleCase(type);
+      const style = getDamageTypeStyle(type, styleOverrides);
+      const previewBox = row.querySelector("[data-preview-box]") ?? row.querySelector(".rsds-manager-preview");
+      const previewCanvas = row.querySelector("[data-preview-canvas]");
+      const previewEmpty = row.querySelector("[data-preview-empty]");
+      const previewText = row.querySelector("[data-preview-text]");
+      const imageModeBadge = row.querySelector("[data-derived='image-mode']");
+      const soundModeBadge = row.querySelector("[data-derived='sound-mode']");
+      const soundEnabled = Boolean(row.querySelector(`[name="styles.${type}.soundEnabled"]`)?.checked);
+      const kind = getPreviewKindForType(type);
+      const previewPath = style.image || getFallbackSplatPath({ kind });
+      const isTint = style.tint !== null;
+
+      row.classList.toggle("rsds-uses-tint-base", isTint);
+
+      if (previewBox) {
+        previewBox.classList.toggle("is-empty", !previewPath);
+        previewBox.style.setProperty("--rsds-preview-text", toCssHexColor(style.textColor, "#FFF7BD"));
+      }
+
+      if (previewEmpty) {
+        previewEmpty.textContent = previewPath ? "" : "No image";
+      }
+
+      if (previewText) {
+        const amount = row.querySelector("[data-action='preview']")?.dataset?.amount ?? (type === "heal" ? "12" : "9");
+        previewText.textContent = amount;
+        previewText.style.color = toCssHexColor(style.textColor, "#FFF7BD");
+      }
+
+      if (imageModeBadge) {
+        imageModeBadge.textContent = isTint
+          ? "Tint Base"
+          : (String(row.querySelector(`[name="styles.${type}.image"]`)?.value ?? "").trim() ? "Custom Image" : "Fallback Image");
+      }
+
+      if (soundModeBadge) {
+        soundModeBadge.textContent = !soundEnabled
+          ? "Sound Off"
+          : (String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim() ? "Custom Sound" : "Default Sound");
+      }
+
+      this._renderPreviewCanvas(previewCanvas, previewPath, style.tint, previewBox);
+    }
+  }
+
+  async _renderPreviewCanvas(canvasElement, imagePath, tintValue, previewBox) {
+    if (!(canvasElement instanceof HTMLCanvasElement)) return;
+
+    const context = canvasElement.getContext("2d");
+    if (!context) return;
+    const requestKey = `${imagePath || ""}|${tintValue ?? ""}`;
+    canvasElement.dataset.previewRequestKey = requestKey;
+
+    const dpr = window.devicePixelRatio || 1;
+    const baseSize = 144;
+    if (canvasElement.width !== baseSize * dpr || canvasElement.height !== baseSize * dpr) {
+      canvasElement.width = baseSize * dpr;
+      canvasElement.height = baseSize * dpr;
+    }
+
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    context.scale(dpr, dpr);
+
+    if (!imagePath) {
+      if (previewBox) previewBox.classList.add("is-empty");
+      return;
+    }
+
+    const loadedImage = await loadPreviewImage(imagePath);
+    if (canvasElement.dataset.previewRequestKey !== requestKey) return;
+    if (!loadedImage) {
+      if (previewBox) previewBox.classList.add("is-empty");
+      return;
+    }
+
+    if (previewBox) previewBox.classList.remove("is-empty");
+
+    const maxWidth = baseSize - 16;
+    const maxHeight = baseSize - 16;
+    const widthScale = maxWidth / Math.max(loadedImage.naturalWidth || loadedImage.width || 1, 1);
+    const heightScale = maxHeight / Math.max(loadedImage.naturalHeight || loadedImage.height || 1, 1);
+    const scale = Math.min(widthScale, heightScale, 1);
+    const drawWidth = Math.max(Math.round((loadedImage.naturalWidth || loadedImage.width || maxWidth) * scale), 1);
+    const drawHeight = Math.max(Math.round((loadedImage.naturalHeight || loadedImage.height || maxHeight) * scale), 1);
+    const drawX = Math.round((baseSize - drawWidth) / 2);
+    const drawY = Math.round((baseSize - drawHeight) / 2);
+
+    context.imageSmoothingEnabled = true;
+    context.drawImage(loadedImage, drawX, drawY, drawWidth, drawHeight);
+
+    if (tintValue !== null) {
+      const tintColor = toCssHexColor(tintValue, "#FF0000");
+      context.globalCompositeOperation = "source-atop";
+      context.fillStyle = tintColor;
+      context.fillRect(drawX, drawY, drawWidth, drawHeight);
+      context.globalCompositeOperation = "multiply";
+      context.drawImage(loadedImage, drawX, drawY, drawWidth, drawHeight);
+      context.globalCompositeOperation = "destination-atop";
+      context.drawImage(loadedImage, drawX, drawY, drawWidth, drawHeight);
+      context.globalCompositeOperation = "source-over";
     }
   }
 
@@ -2353,6 +2538,47 @@ class DamageTypeStylesConfig extends FormApplication {
     });
 
     await picker.render(true);
+  }
+
+  _testSoundForRow(row) {
+    const type = normalizeDamageType(row.dataset.type);
+    const soundEnabled = Boolean(row.querySelector(`[name="styles.${type}.soundEnabled"]`)?.checked);
+    if (!soundEnabled) {
+      ui.notifications?.warn("Enable sound for this row before testing it.");
+      return;
+    }
+
+    const customPath = String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim();
+    const soundPath = customPath || game.settings.get(MODULE_ID, "defaultSplatSoundPath");
+    if (!soundPath) {
+      ui.notifications?.warn("This row does not have a sound path to test.");
+      return;
+    }
+
+    playPreviewSoundPath(soundPath);
+  }
+
+  _resetRowToDefaults(row, type) {
+    const defaults = getDefaultDamageTypeStyles()[type];
+    if (!defaults) return;
+
+    row.querySelector(`[name="styles.${type}.enabled"]`).checked = defaults.enabled !== false;
+    row.querySelector(`[name="styles.${type}.image"]`).value = defaults.image ?? "";
+    row.querySelector(`[name="styles.${type}.soundEnabled"]`).checked = defaults.soundEnabled !== false;
+    row.querySelector(`[name="styles.${type}.sound"]`).value = defaults.sound ?? "";
+    row.querySelector(`[name="styles.${type}.tintEnabled"]`).checked = Boolean(defaults.tint);
+    row.querySelector(`[name="styles.${type}.textEnabled"]`).checked = Boolean(defaults.text);
+    row.querySelector(`[name="styles.${type}.tint"]`).value = defaults.tint || "#FF0000";
+    row.querySelector(`[name="styles.${type}.text"]`).value = defaults.text || "#FFF7BD";
+    this._syncColorToggleStates(row);
+    this._syncRowPreviews(row);
+  }
+
+  async _resetAllRowsToDefaults() {
+    for (const row of this.form.querySelectorAll(".rsds-row[data-type]")) {
+      this._resetRowToDefaults(row, normalizeDamageType(row.dataset.type));
+    }
+    ui.notifications?.info("Damage type rows reset to bundled defaults.");
   }
 
   _collectStylesFromForm() {

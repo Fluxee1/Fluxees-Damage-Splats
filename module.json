@@ -1,9 +1,8 @@
 {
   "id": "rs-damage-splats",
   "title": "Fluxee's Damage Splats",
-  "description": "Shows synchronized RuneScape-style damage, healing, temp HP, and typed damage splats for Foundry VTT.",
-  "version": "1.0.0",
-  "version": "1.0.1",
+  "description": "Shows synchronized RuneScape-style damage, healing, temp HP, and typed damage splats for Foundry VTT, with custom per-type images, tint, text, and sound support.",
+  "version": "1.1.0",
   "compatibility": {
     "minimum": "11",
     "verified": "13"

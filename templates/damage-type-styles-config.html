@@ -1,165 +1,170 @@
-<form class="rs-damage-splats-config">
-  <p class="notes">
-    Set an image path for each splat type, then use <strong>Test Splat</strong> to preview the real result on a token.
-    If no image is set, the module falls back to the normal regular or crit splat.
-  </p>
-  <p class="notes">
-    Use the <strong>...</strong> picker buttons to choose custom images and sounds from Foundry's file storage.
-    Do <strong>not</strong> upload your custom files into this module's <code>assets</code> folder, because module updates can delete them.
-  </p>
-
-  <div class="rsds-table-scroll">
-    <div class="rsds-table">
-      <div class="rsds-row rsds-head">
-        <div class="rsds-col-type">Type</div>
-        <div class="rsds-col-toggle">Enabled</div>
-        <div class="rsds-col-image">Image Path</div>
-        <div class="rsds-col-toggle">Sound</div>
-        <div class="rsds-col-sound">Sound Path</div>
-        <div class="rsds-col-color">Text</div>
-        <div class="rsds-col-color">Tint</div>
-        <div class="rsds-col-actions">Actions</div>
-      </div>
-
-      {{#each rows}}
-      <div class="rsds-row" data-type="{{type}}" data-label="{{label}}">
-        <div class="rsds-type">
-          <strong>{{label}}</strong>
-          <div class="notes"><code>{{type}}</code></div>
-        </div>
-
-      <div class="rsds-enabled">
-        <label class="rsds-inline-option">
-          <input
-            type="checkbox"
-            name="styles.{{type}}.enabled"
-            aria-label="Enable {{label}} splat"
-            {{#if enabled}}checked{{/if}}
-          />
-          <span class="rsds-inline-option-label">Enabled</span>
-        </label>
-      </div>
-
-        <div class="rsds-image">
-          <div class="rsds-path-field">
-            <input
-              type="text"
-              name="styles.{{type}}.image"
-              value="{{image}}"
-              spellcheck="false"
-              placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
-            />
-            <button
-              type="button"
-              class="rsds-browse-button"
-              data-action="browse-image"
-              data-target='[name="styles.{{type}}.image"]'
-              title="Browse for an image file"
-              aria-label="Browse for an image file"
-            >
-              ...
-            </button>
-          </div>
-          <div class="notes rsds-image-hint" data-role="image-hint">
-            <strong>Tint</strong> uses the tint-base splat for this row instead of the image path.
-          </div>
-        </div>
-
-      <div class="rsds-sound-enabled">
-        <label class="rsds-inline-option">
-          <input
-            type="checkbox"
-            name="styles.{{type}}.soundEnabled"
-            aria-label="Enable {{label}} sound"
-            {{#if soundEnabled}}checked{{/if}}
-          />
-          <span class="rsds-inline-option-label">Sound</span>
-        </label>
-      </div>
-
-        <div class="rsds-sound">
-          <div class="rsds-path-field">
-            <input
-              type="text"
-              name="styles.{{type}}.sound"
-              value="{{sound}}"
-              spellcheck="false"
-              placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
-            />
-            <button
-              type="button"
-              class="rsds-browse-button"
-              data-action="browse-sound"
-              data-target='[name="styles.{{type}}.sound"]'
-              title="Browse for an audio file"
-              aria-label="Browse for an audio file"
-            >
-              ...
-            </button>
-          </div>
-        </div>
-
-        <div class="rsds-text">
-          <label class="rsds-color-control" title="Use a custom text color">
-            <input
-              type="checkbox"
-              class="rsds-color-toggle"
-              name="styles.{{type}}.textEnabled"
-              {{#if text}}checked{{/if}}
-            />
-            <span class="rsds-color-label">Text</span>
-          </label>
-          <input
-            type="color"
-            class="rsds-color-input"
-            name="styles.{{type}}.text"
-            value="{{#if text}}{{text}}{{else}}#FFF7BD{{/if}}"
-            data-default-color="#FFF7BD"
-            aria-label="{{label}} text color"
-          />
-        </div>
-
-        <div class="rsds-tint">
-          <label class="rsds-color-control" title="Use a custom splat tint">
-            <input
-              type="checkbox"
-              class="rsds-color-toggle"
-              name="styles.{{type}}.tintEnabled"
-              {{#if tint}}checked{{/if}}
-            />
-            <span class="rsds-color-label">Tint</span>
-          </label>
-          <input
-            type="color"
-            class="rsds-color-input"
-            name="styles.{{type}}.tint"
-            value="{{#if tint}}{{tint}}{{else}}#FF0000{{/if}}"
-            data-default-color="#FF0000"
-            aria-label="{{label}} tint color"
-          />
-        </div>
-
-        <div class="rsds-actions">
-          <button type="button" data-action="preview" data-type="{{type}}" data-amount="{{previewAmount}}">
-            Test Splat
-          </button>
-          <button type="button" data-action="reset" data-type="{{type}}">
-            Reset
-          </button>
-        </div>
-      </div>
-      {{/each}}
+<form class="rsds-manager-shell rs-damage-splats-config" data-rsds-manager-form>
+  <header class="rsds-manager-header">
+    <div class="rsds-manager-heading">
+      <h2>Damage Type Styles</h2>
+      <p class="notes">
+        Preview each splat style directly in this manager. Use <strong>Test Splat</strong> to see the real token result,
+        <strong>Test Sound</strong> to hear the configured hit sound, and <strong>Browse</strong> to pick files from Foundry storage.
+      </p>
+      <p class="notes">
+        Do <strong>not</strong> upload your custom files into this module's <code>assets</code> folder, because module updates can delete them.
+      </p>
     </div>
-  </div>
+    <div class="rsds-manager-toolbar">
+      <button type="button" data-action="reset-all">
+        <i class="fas fa-rotate-left"></i>
+        Reset All Defaults
+      </button>
+    </div>
+  </header>
 
-  <div class="form-group">
-    <button type="button" data-action="apply">
+  <section class="rsds-manager-list">
+    {{#each rows}}
+      <article class="rsds-manager-row rsds-row" data-type="{{type}}" data-label="{{label}}">
+        <div class="rsds-manager-preview" data-preview-box>
+          <canvas
+            class="rsds-manager-preview-canvas"
+            data-preview-canvas
+            width="144"
+            height="144"
+            aria-label="{{label}} preview"
+          ></canvas>
+          <div class="rsds-manager-preview-empty" data-preview-empty>No image</div>
+          <span class="rsds-manager-preview-text" data-preview-text>{{previewAmount}}</span>
+        </div>
+
+        <div class="rsds-manager-fields">
+          <div class="rsds-manager-topline">
+            <div class="rsds-manager-badges">
+              <span class="rsds-manager-badge">{{label}}</span>
+              <span class="rsds-manager-badge rsds-manager-badge-muted" data-derived="image-mode">{{imageModeLabel}}</span>
+              <span class="rsds-manager-badge rsds-manager-badge-muted" data-derived="sound-mode">{{soundModeLabel}}</span>
+            </div>
+            <div class="rsds-manager-row-actions">
+              <button type="button" class="rsds-manager-preview-button" data-action="preview" data-type="{{type}}" data-amount="{{previewAmount}}">
+                Test Splat
+              </button>
+              <button type="button" class="rsds-manager-sound-button" data-action="test-sound" data-type="{{type}}">
+                Test Sound
+              </button>
+              <button type="button" class="rsds-manager-remove" data-action="reset" data-type="{{type}}">
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <div class="rsds-manager-grid rsds-manager-grid-primary">
+            <label>
+              <span>Image Path</span>
+              <div class="rsds-manager-path-row">
+                <input
+                  type="text"
+                  name="styles.{{type}}.image"
+                  value="{{image}}"
+                  spellcheck="false"
+                  placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
+                />
+                <button
+                  type="button"
+                  data-action="browse-image"
+                  data-target='[name="styles.{{type}}.image"]'
+                >
+                  Browse
+                </button>
+              </div>
+            </label>
+
+            <label>
+              <span>Sound Path</span>
+              <div class="rsds-manager-path-row">
+                <input
+                  type="text"
+                  name="styles.{{type}}.sound"
+                  value="{{sound}}"
+                  spellcheck="false"
+                  placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
+                />
+                <button
+                  type="button"
+                  data-action="browse-sound"
+                  data-target='[name="styles.{{type}}.sound"]'
+                >
+                  Browse
+                </button>
+              </div>
+            </label>
+          </div>
+
+          <div class="rsds-manager-grid rsds-manager-grid-secondary">
+            <label class="rsds-manager-toggle">
+              <input
+                type="checkbox"
+                name="styles.{{type}}.enabled"
+                aria-label="Enable {{label}} splat"
+                {{#if enabled}}checked{{/if}}
+              />
+              <span>Enabled</span>
+            </label>
+
+            <label class="rsds-manager-toggle">
+              <input
+                type="checkbox"
+                name="styles.{{type}}.soundEnabled"
+                aria-label="Enable {{label}} sound"
+                {{#if soundEnabled}}checked{{/if}}
+              />
+              <span>Sound</span>
+            </label>
+
+            <label class="rsds-manager-toggle rsds-manager-color-toggle">
+              <input
+                type="checkbox"
+                class="rsds-color-toggle"
+                name="styles.{{type}}.textEnabled"
+                {{#if text}}checked{{/if}}
+              />
+              <span>Text</span>
+              <input
+                type="color"
+                class="rsds-manager-color-input"
+                name="styles.{{type}}.text"
+                value="{{#if text}}{{text}}{{else}}#FFF7BD{{/if}}"
+                data-default-color="#FFF7BD"
+                aria-label="{{label}} text color"
+              />
+            </label>
+
+            <label class="rsds-manager-toggle rsds-manager-color-toggle">
+              <input
+                type="checkbox"
+                class="rsds-color-toggle"
+                name="styles.{{type}}.tintEnabled"
+                {{#if tint}}checked{{/if}}
+              />
+              <span>Tint</span>
+              <input
+                type="color"
+                class="rsds-manager-color-input"
+                name="styles.{{type}}.tint"
+                value="{{#if tint}}{{tint}}{{else}}#FF0000{{/if}}"
+                data-default-color="#FF0000"
+                aria-label="{{label}} tint color"
+              />
+            </label>
+          </div>
+        </div>
+      </article>
+    {{/each}}
+  </section>
+
+  <footer class="rsds-manager-footer">
+    <button type="button" data-action="apply" class="rsds-manager-save-secondary">
       <i class="fas fa-check"></i>
       Apply Styles
     </button>
-    <button type="submit" data-action="save">
+    <button type="submit" class="rsds-manager-save" data-action="save">
       <i class="fas fa-save"></i>
       Save Styles
     </button>
-  </div>
+  </footer>
 </form>

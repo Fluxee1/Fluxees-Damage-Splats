@@ -1,290 +1,421 @@
 /* Foundry loads this file with the module, even though the current effect is PIXI-based.
    Keeping the font-face here makes the font easier to inspect in the browser if needed. */
 @font-face {
-  font-family: "RuneScape Bold";
-  src: url("../assets/runescape_bold.ttf") format("truetype");
   font-family: "RuneScape UF";
   src: url("../assets/runescape_uf.ttf") format("truetype");
   font-display: swap;
 }
 
 .rsds-config-window .window-content {
-  overflow: auto;
-}
-
-.rs-damage-splats-config .rsds-table {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.rs-damage-splats-config {
-  display: block;
-}
-
-.rs-damage-splats-config .rsds-table-scroll {
-  overflow-x: auto;
-  overflow-y: visible;
-  padding-right: 6px;
-  padding-bottom: 4px;
-  margin-top: 12px;
-}
-
-.rs-damage-splats-config .rsds-row {
-  display: grid;
-  min-width: 1300px;
-  grid-template-columns: minmax(140px, 1.2fr) 68px minmax(250px, 2.3fr) 68px minmax(250px, 2.3fr) minmax(124px, 0.95fr) minmax(124px, 0.95fr) minmax(190px, 1.15fr);
-  gap: 10px;
-  align-items: start;
-}
-
-.rs-damage-splats-config .rsds-head {
-  font-weight: 700;
-  border-bottom: 1px solid var(--color-border-light-primary);
-  padding: 0 0 8px;
-  align-items: end;
-}
-
-.rs-damage-splats-config .rsds-row input[type="text"] {
-  width: 100%;
-  min-width: 0;
-}
-
-.rs-damage-splats-config .rsds-path-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-}
-
-.rs-damage-splats-config .rsds-path-field input[type="text"] {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.rs-damage-splats-config .rsds-browse-button {
-  flex: 0 0 32px;
-  width: 32px;
-  min-width: 32px;
+  overflow: hidden;
   padding: 0;
-  white-space: nowrap;
-  text-align: center;
-  font-weight: 700;
+  background: #161318;
 }
 
-.rs-damage-splats-config .rsds-type {
+.rsds-manager-shell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 4px;
+  min-height: 100%;
+  color: #efe5d0;
+  background:
+    radial-gradient(circle at top, rgba(56, 44, 39, 0.35), rgba(19, 16, 20, 0.96)),
+    linear-gradient(180deg, rgba(24, 21, 27, 0.98), rgba(16, 14, 19, 0.98));
 }
 
-.rs-damage-splats-config .rsds-type .notes {
-  margin: 0;
-  line-height: 1.2;
+.rsds-manager-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid rgba(255, 240, 214, 0.08);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
 }
 
-.rs-damage-splats-config .rsds-image {
+.rsds-manager-heading h2 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  line-height: 1;
+  color: #f4ead8;
+}
+
+.rsds-manager-heading .notes {
+  margin: 0 0 8px;
+  max-width: 560px;
+  line-height: 1.45;
+  color: rgba(239, 229, 208, 0.82);
+}
+
+.rsds-manager-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rsds-manager-toolbar button,
+.rsds-manager-footer button {
+  min-height: 40px;
+  padding-inline: 16px;
+  border-radius: 10px;
+  color: #efe5d0;
+}
+
+.rsds-manager-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
   flex-direction: column;
-  align-items: stretch;
+  gap: 14px;
+  padding: 18px;
+  padding-bottom: 104px;
 }
 
-.rs-damage-splats-config .rsds-image-hint {
-  display: none;
-  margin: 4px 0 0;
-  line-height: 1.2;
+.rsds-manager-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(255, 240, 214, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(38, 31, 36, 0.94), rgba(28, 24, 29, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.22);
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
-.rs-damage-splats-config .rsds-row.rsds-uses-tint-base .rsds-image-hint {
+.rsds-manager-row:hover {
+  border-color: rgba(244, 192, 118, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.rsds-manager-preview {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255, 240, 214, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.rsds-manager-preview-canvas {
+  width: 100%;
+  height: 100%;
   display: block;
 }
 
-.rs-damage-splats-config .rsds-type code {
-  display: inline-block;
-  max-width: 100%;
-  white-space: normal;
-  word-break: break-word;
+.rsds-manager-preview.is-empty .rsds-manager-preview-empty {
+  display: block;
 }
 
-.rs-damage-splats-config .rsds-enabled,
-.rs-damage-splats-config .rsds-sound-enabled {
-  display: flex;
-  justify-content: center;
-  padding-top: 6px;
-}
-
-.rs-damage-splats-config .rsds-inline-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.rs-damage-splats-config .rsds-inline-option-label {
+.rsds-manager-preview-empty {
   display: none;
   font-size: 12px;
+  color: rgba(239, 229, 208, 0.7);
 }
 
-.rs-damage-splats-config .rsds-image,
-.rs-damage-splats-config .rsds-sound,
-.rs-damage-splats-config .rsds-text,
-.rs-damage-splats-config .rsds-tint {
+.rsds-manager-preview-text {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: "RuneScape UF", sans-serif;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--rsds-preview-text, #fff7bd);
+  text-shadow:
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000,
+    0 3px 8px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.rsds-manager-fields {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.rs-damage-splats-config .rsds-row input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-}
-
-.rs-damage-splats-config .rsds-color-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  margin: 0;
-}
-
-.rs-damage-splats-config .rsds-color-label {
-  font-size: 12px;
-}
-
-.rs-damage-splats-config .rsds-color-input {
-  width: 40px;
-  min-width: 40px;
-  height: 28px;
-  padding: 2px;
-  border-radius: 4px;
-}
-
-.rs-damage-splats-config .rsds-color-input:disabled {
-  opacity: 0.45;
-}
-
-.rs-damage-splats-config .rsds-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-}
-
-.rs-damage-splats-config .rsds-actions button {
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-
-.rs-damage-splats-config .form-group {
-  margin-top: 0;
-  padding-top: 8px;
-  border-top: 1px solid var(--color-border-light-primary);
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.rs-damage-splats-config .form-group button[type="submit"] {
-  min-width: 160px;
-}
-
-.rs-damage-splats-config .form-group button[data-action="apply"] {
-  min-width: 160px;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-row {
-  min-width: 1120px;
-  grid-template-columns: minmax(130px, 1.15fr) 62px minmax(210px, 2fr) 62px minmax(210px, 2fr) minmax(112px, 0.9fr) minmax(112px, 0.9fr) minmax(170px, 1fr);
-  gap: 8px;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-actions {
   flex-direction: column;
-  align-items: stretch;
+  gap: 14px;
+  min-width: 0;
 }
 
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-path-field {
-  gap: 4px;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-browse-button {
-  flex-basis: 28px;
-  width: 28px;
-  min-width: 28px;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-actions button {
-  width: 100%;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-color-label {
-  display: inline;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-color-input {
-  width: 34px;
-  min-width: 34px;
-}
-
-.rsds-config-window.rsds-layout-compact .rs-damage-splats-config .rsds-inline-option-label,
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-inline-option-label {
-  display: inline;
-}
-
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-table {
+.rsds-manager-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
 }
 
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-head {
-  display: none;
-}
-
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-row {
-  min-width: 0;
-  grid-template-columns: 1fr;
+.rsds-manager-badges {
+  display: flex;
   gap: 8px;
-  padding: 10px 0 14px;
-  border-bottom: 1px solid var(--color-border-light-primary);
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-enabled,
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-sound-enabled {
-  justify-content: flex-start;
-  padding-top: 0;
+.rsds-manager-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(244, 192, 118, 0.14);
+  color: #f3d8ac;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-actions {
-  flex-direction: row;
+.rsds-manager-badge-muted {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(239, 229, 208, 0.8);
 }
 
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .rsds-path-field {
+.rsds-manager-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.rsds-manager-row-actions button {
+  min-height: 36px;
+  padding-inline: 12px;
+  white-space: nowrap;
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.rsds-manager-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.rsds-manager-grid-primary {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.rsds-manager-grid-secondary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+}
+
+.rsds-manager-fields label {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
-.rsds-config-window.rsds-layout-stacked .rs-damage-splats-config .form-group {
+.rsds-manager-fields label > span {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(239, 229, 208, 0.82);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.rsds-manager-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.rsds-manager-fields input[type="text"] {
+  min-height: 40px;
+  background: rgba(12, 10, 14, 0.88);
+  border: 1px solid rgba(255, 240, 214, 0.08);
+  color: #f7efe0;
+  border-radius: 10px;
+}
+
+.rsds-manager-fields input[type="text"]:focus {
+  border-color: rgba(244, 192, 118, 0.45);
+  box-shadow: 0 0 0 1px rgba(244, 192, 118, 0.25);
+}
+
+.rsds-manager-fields button,
+.rsds-manager-row-actions button {
+  background: rgba(18, 16, 20, 0.92);
+  color: #efe5d0;
+  border: 1px solid rgba(255, 240, 214, 0.18);
+}
+
+.rsds-manager-toolbar button,
+.rsds-manager-footer button {
+  background: rgba(18, 16, 20, 0.92);
+  color: #efe5d0;
+  border: 1px solid rgba(255, 240, 214, 0.18);
+}
+
+.rsds-manager-fields button:hover,
+.rsds-manager-row-actions button:hover,
+.rsds-manager-toolbar button:hover,
+.rsds-manager-footer button:hover {
+  border-color: rgba(244, 192, 118, 0.45);
+  box-shadow: 0 0 0 1px rgba(244, 192, 118, 0.18);
+}
+
+.rsds-manager-toggle {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 240, 214, 0.08);
+}
+
+.rsds-manager-toggle > span {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(239, 229, 208, 0.9);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.rsds-manager-color-toggle {
+  justify-content: space-between;
+}
+
+.rsds-manager-color-input {
+  width: 38px;
+  min-width: 38px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 6px;
+}
+
+.rsds-manager-color-input:disabled {
+  opacity: 0.45;
+}
+
+.rsds-manager-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid rgba(255, 240, 214, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  position: sticky;
+  bottom: 0;
+}
+
+.rsds-manager-save,
+.rsds-manager-save-secondary {
+  min-width: 170px;
+}
+
+.rsds-config-window.rsds-layout-compact .rsds-manager-row {
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.rsds-config-window.rsds-layout-compact .rsds-manager-preview {
+  width: 92px;
+  height: 92px;
+}
+
+.rsds-config-window.rsds-layout-compact .rsds-manager-grid-secondary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-header {
   flex-direction: column;
 }
 
-@media (max-width: 1100px) {
-  .rs-damage-splats-config .rsds-table {
-    gap: 12px;
+.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-primary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-secondary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .rsds-manager-header {
+    flex-direction: column;
   }
 
-  .rs-damage-splats-config .rsds-head {
-    display: none;
+  .rsds-manager-grid-primary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .rs-damage-splats-config .rsds-row {
-    min-width: 0;
+  .rsds-manager-grid-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-row {
+  grid-template-columns: 1fr;
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-preview {
+  width: 100%;
+  max-width: 180px;
+  height: 140px;
+  justify-self: center;
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-topline {
+  flex-direction: column;
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-row-actions {
+  justify-content: flex-start;
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-secondary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-footer {
+  flex-direction: column;
+}
+
+.rsds-config-window.rsds-layout-stacked .rsds-manager-save,
+.rsds-config-window.rsds-layout-stacked .rsds-manager-save-secondary {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .rsds-manager-row {
     grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 10px 0 14px;
-    border-bottom: 1px solid var(--color-border-light-primary);
   }
 
-  .rs-damage-splats-config .rsds-enabled,
-  .rs-damage-splats-config .rsds-sound-enabled {
+  .rsds-manager-preview {
+    width: 100%;
+    max-width: 180px;
+    height: 140px;
+    justify-self: center;
+  }
+
+  .rsds-manager-topline {
+    flex-direction: column;
+  }
+
+  .rsds-manager-row-actions {
     justify-content: flex-start;
-    padding-top: 0;
+  }
+
+  .rsds-manager-grid-secondary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rsds-manager-footer {
+    flex-direction: column;
+  }
+
+  .rsds-manager-save,
+  .rsds-manager-save-secondary {
+    width: 100%;
   }
 }
