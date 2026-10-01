@@ -1,0 +1,24 @@
+{
+  "source": "https://github.com/Fluxee1/Fluxees-Damage-Splats/tree/d4e0866ae63e9227c436def8bf4c6e2643516869/assets",
+  "assets": {
+    "assets/acidsplat.webp": "2d985f94d99ec8ef098f4363fcd20f51c714a8dbf7130c7a3a0e92173536c920",
+    "assets/coldsplat.webp": "c3aa2b5866e6c22c653bfe4157122ee6b7e537eeb8bea4d9eadf42b6df1cf579",
+    "assets/crit-splat.webp": "44bb33994bd55aec4aca438ec0ed374a0aedc37ab7a5690d4c68619cc34a7d8a",
+    "assets/firesplat.webp": "941db8916eb71e589f62fc29ac99d31aa9abf371038196fa29edfc95d35b3f7f",
+    "assets/forcesplat.webp": "dfbff7f3137dd743978b25e21b7da39895469ee1eb33f845280e42e5dbb5a15d",
+    "assets/healsplat.webp": "d2d2513f9729bd4e84ed009bb52c55b406f41519ea50d507054fa1d390b25671",
+    "assets/healtint.webp": "d9feef8c0d9760751a527ad7f6f7f7e9303ae263e40ddd91ec0b320f6da50e46",
+    "assets/lightningsplat.webp": "ba19e94106414f06545ff8d6e4e815810d1887250b1f582e10eeb4a324903018",
+    "assets/necroticsplat.webp": "29262761ad673c4bee6c438f6bb195d4618d5bb8a70ac2c482f1cc3ca57b927d",
+    "assets/poisonsplat.webp": "1f787efe1986addcc10b48957f05e432dbe708057ecfd5057f1f790009fe6f04",
+    "assets/psychicsplat.webp": "2d8071427bb9913acdcde168f8316d1e2c55dde99fc261a27ccf6e0042221134",
+    "assets/radiantsplat.webp": "e690fee0895bb671c0db585123362af01ca4d57950336fd54613749c87ef9add",
+    "assets/regularsplat.webp": "53567918ae56e0d5ffedd5e34e18e5af40ae565ad678114b514c0376b83a2344",
+    "assets/rssplathit.ogg": "518a864fcfc0f6e6eab05968d4a94795e25b233f5162537aa094d303470148be",
+    "assets/runescape_bold.ttf": "c8b9afefe105a78717fde9692deafbf2361b54bcf9c8019b6d817de94f1c6168",
+    "assets/runescape_uf.ttf": "4fd8115952dac02eb3b32a340e7c47c6388b1017669442ed80f9c4aae2dbf25c",
+    "assets/splattint.webp": "7da018958a6bc44e7c8d7c81a8eebb26f6c9052152e6661b123566aa085ef364",
+    "assets/temphpsplat.webp": "853d83beab5c403e15f41533d612a1a85db67c5c6f9ab76b5a011cb7424e2425",
+    "assets/thundersplat.webp": "d9caa02abb97e640796761a4b84e932611cceafff19cbd1e8e61124cd8e31923"
+  }
+}

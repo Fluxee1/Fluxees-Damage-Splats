@@ -1,0 +1,67 @@
+name: Validate and package module
+
+on:
+  push:
+    branches: [main]
+    tags: ['*-Release']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -c 'import json, os; m=json.load(open("module.json")); expected=m["version"] + "-Release"; assert os.environ["RELEASE_TAG"] == expected, f"Release tag must be {expected}"'
+      - name: Test packaging and check JavaScript syntax
+        run: |
+          python -m unittest discover -s tests -v
+          node --check scripts/rs-damage-splats.js
+      - name: Build validated installable assets
+        run: python tools/package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foundry-module
+          path: |
+            dist/module.json
+            dist/rs-damage-splats.zip
+          if-no-files-found: error
+
+  release:
+    # Publishing is opt-in: a version-matching release tag must be pushed.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: foundry-module
+          path: dist
+      - name: Publish verified release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Keep the release unpublished until both installable assets are uploaded.
+          # Existing releases are never overwritten by rerunning a release tag.
+          gh release create "$RELEASE_TAG" dist/module.json dist/rs-damage-splats.zip \
+            --draft --verify-tag \
+            --title "Fluxee's Damage Splats ${RELEASE_TAG%-Release}" \
+            --notes 'Install in Foundry using the attached module.json manifest. The ZIP contains only reviewed public module files and bundled assets. socketlib is required; Midi-QOL is optional for typed damage.'
+          gh release edit "$RELEASE_TAG" --draft=false --latest

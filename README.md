@@ -15,10 +15,20 @@ RuneScape-style damage splats for Foundry VTT with support for healing, temp HP,
 
 ## Installation
 
-1. Install and enable `Fluxee's Damage Splats`
-2. Install and enable `socketlib`
-3. Optionally install and enable `Midi-QOL` for typed damage splats
-4. Open the module settings and choose the images, sounds, and colors you want to use
+1. In Foundry's **Setup → Add-on Modules → Install Module** screen, paste this URL into **Manifest URL** and click **Install**:
+
+   ```text
+   https://github.com/Fluxee1/Fluxees-Damage-Splats/releases/latest/download/module.json
+   ```
+
+2. Install `socketlib` if Foundry prompts for the required dependency
+3. Open your world and enable **Fluxee's Damage Splats** and **socketlib** in **Manage Modules**
+4. Optionally enable `Midi-QOL` for typed damage splats
+5. Open the module settings and choose the images, sounds, and colors you want to use
+
+The module's existing compatibility declaration is Foundry VTT **11 or later**, verified for **13**. Version 1.1.1 fixes installation packaging; it does not change the splat behavior or add new compatibility claims.
+
+If an older installation cannot check for updates, reinstall through the manifest URL above. The module ID remains `rs-damage-splats`, so existing world settings continue to use the same ID.
 
 ## Customization
 
@@ -53,4 +63,4 @@ Bundled default assets include:
 
 ## Version
 
-Current version: `1.1.0`
+Current version: `1.1.1`
