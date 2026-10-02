@@ -5,6 +5,18 @@ on:
     branches: [main]
     tags: ['*-Release']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published release tag (registration only)
+        required: true
+        default: 1.1.1-Release
+        type: string
+      dry_run:
+        description: Validate without saving to Foundry
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -65,3 +77,27 @@ jobs:
             --title "Fluxee's Damage Splats ${RELEASE_TAG%-Release}" \
             --notes 'Install in Foundry using the attached module.json manifest. The ZIP contains only reviewed public module files and bundled assets. socketlib is required; Midi-QOL is optional for typed damage.'
           gh release edit "$RELEASE_TAG" --draft=false --latest
+
+  foundry:
+    needs: release
+    if: >-
+      always() && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success') || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: foundry-package-registration
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test Foundry registration helper
+        run: python -m unittest discover -s tests -p test_foundry_release.py -v
+      - name: Verify published assets and register with Foundry
+        env:
+          FOUNDRY_PACKAGE_RELEASE_TOKEN: ${{ secrets.FOUNDRY_PACKAGE_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: python tools/foundry_release.py --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --dry-run "$DRY_RUN"
