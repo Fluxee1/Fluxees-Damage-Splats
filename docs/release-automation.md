@@ -14,7 +14,10 @@ For an existing GitHub release, open Actions, select the release workflow, and
 choose Run workflow on main. Enter its exact release tag. Leave `dry_run` enabled
 to validate without saving. Disable it only when registering an unregistered
 release or recovering a failed registration; this path never republishes GitHub
-assets. A duplicate dry-run can fail even when the credentials are valid.
+assets. If the API reports a duplicate, an exact version heading and manifest
+link in the same public directory entry confirm the distinct "already
+registered" outcome. This is not fresh dry-run validation or a metadata update.
+A missing, unavailable, or nonmatching directory entry still fails safely.
 
 Rate limits honor Retry-After with bounded retries. Validation errors fail without
 retry. Timeouts and server errors require checking the public Foundry package

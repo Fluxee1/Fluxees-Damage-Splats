@@ -3,6 +3,7 @@ import argparse
 from email.utils import parsedate_to_datetime
 import datetime
 import hashlib
+from html.parser import HTMLParser
 import io
 import json
 import os
@@ -62,15 +63,62 @@ def verified_payload(repository, tag, dry_run):
     print(f'Verified public release {tag}: {len(names)} files and {len(allowlist)} reviewed assets.')
     return result
 
+class PackageVersionParser(HTMLParser):
+    """Match a complete package-version list item, never compatibility text."""
+    def __init__(self, version, manifest):
+        super().__init__(convert_charrefs=True)
+        self.heading = 'Version ' + version
+        self.manifest = manifest
+        self.matches = False
+        self.li_depth = 0
+        self.headings = []
+        self.hrefs = set()
+        self.heading_parts = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'li':
+            if self.li_depth:
+                self.li_depth += 1
+            elif 'package-version' in attrs.get('class', '').split():
+                self.li_depth = 1
+                self.headings = []
+                self.hrefs = set()
+                self.heading_parts = None
+        if self.li_depth != 1:
+            return
+        if tag == 'h4':
+            self.heading_parts = []
+        elif tag == 'a':
+            self.hrefs.add(attrs.get('href'))
+
+    def handle_data(self, text):
+        if self.li_depth == 1 and self.heading_parts is not None:
+            self.heading_parts.append(text)
+
+    def handle_endtag(self, tag):
+        if tag == 'h4' and self.li_depth == 1 and self.heading_parts is not None:
+            self.headings.append(' '.join(''.join(self.heading_parts).split()))
+            self.heading_parts = None
+        if tag == 'li' and self.li_depth:
+            self.li_depth -= 1
+            if not self.li_depth:
+                self.matches |= (self.heading_parts is None
+                                 and self.headings == [self.heading]
+                                 and self.manifest in self.hrefs)
+
+
 def directory_matches(data):
-    """Require version and immutable manifest together in a public version block."""
+    """Require exact version heading and manifest href in the same complete li."""
     try:
         html = read('https://foundryvtt.com/packages/' + data['id']).decode()
-        version = re.escape(data['release']['version'])
-        match = re.search(r'Version\s+' + version + r'\s*</h\d>(.*?)(?=Version\s+\d|</section>|$)', html, re.S)
-        return bool(match and data['release']['manifest'] in match.group(1))
+        parser = PackageVersionParser(data['release']['version'], data['release']['manifest'])
+        parser.feed(html)
+        parser.close()
+        return parser.matches
     except Exception:
         return False
+
 
 def retry_delay(value):
     try:
@@ -85,7 +133,7 @@ def submit(data, token, opener=urllib.request.urlopen, sleep=time.sleep, directo
     assert token, 'FOUNDRY_PACKAGE_RELEASE_TOKEN secret is missing'
     if not data['dry-run'] and directory(data):
         print('Exact version and immutable manifest already present in Foundry directory; no POST sent.')
-        return
+        return 'already_registered'
     request = urllib.request.Request(ENDPOINT, data=json.dumps(data).encode(), method='POST',
         headers={'Authorization': token, 'Content-Type': 'application/json'})
     for attempt in range(3):
@@ -95,7 +143,7 @@ def submit(data, token, opener=urllib.request.urlopen, sleep=time.sleep, directo
             if result.get('status') != 'success':
                 raise RuntimeError('Unexpected API response; inspect Foundry directory before manual retry')
             print('Foundry dry-run validation succeeded.' if data['dry-run'] else 'Foundry release registration succeeded.')
-            return
+            return 'dry_run_validated' if data['dry-run'] else 'registered'
         except urllib.error.HTTPError as error:
             if error.code == 429 and attempt < 2:
                 delay = retry_delay(error.headers.get('Retry-After'))
@@ -112,9 +160,10 @@ def submit(data, token, opener=urllib.request.urlopen, sleep=time.sleep, directo
                     codes = []
                 duplicate = 'unique_together' in codes
                 present = directory(data) if duplicate else False
-                if duplicate and present and not data['dry-run']:
-                    print('Duplicate confirmed against exact public directory version/manifest; already registered.')
-                    return
+                if duplicate and present:
+                    print('Duplicate confirmed against exact public directory version/manifest; already registered.'
+                          + (' No changes saved; no fresh dry-run validation performed.' if data['dry-run'] else ''))
+                    return 'already_registered'
                 raise RuntimeError('Duplicate version: public directory match=' + str(present) if duplicate else 'Foundry validation rejected payload (HTTP 400); review manifest and package settings') from None
             if error.code >= 500 and not data['dry-run'] and directory(data):
                 print('Ambiguous response resolved: exact version/manifest confirmed in directory.')
