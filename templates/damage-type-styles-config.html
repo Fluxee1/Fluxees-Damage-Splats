@@ -1,10 +1,10 @@
-<form class="rsds-manager-shell rs-damage-splats-config" data-rsds-manager-form>
+<div class="rsds-manager-shell rs-damage-splats-config">
   <header class="rsds-manager-header">
     <div class="rsds-manager-heading">
       <h2>Damage Type Styles</h2>
       <p class="notes">
-        Preview each splat style directly in this manager. Use <strong>Test Splat</strong> to see the real token result,
-        <strong>Test Sound</strong> to hear the configured hit sound, and <strong>Browse</strong> to pick files from Foundry storage.
+        Every type uses the tint base by default. Pick your own image, or use <strong>Bundled Art</strong> for the module's
+        pre-colored splat. A tint colors a custom image; untick <strong>Enabled</strong> to hide a type's splats entirely.
       </p>
       <p class="notes">
         Do <strong>not</strong> upload your custom files into this module's <code>assets</code> folder, because module updates can delete them.
@@ -29,7 +29,7 @@
             height="144"
             aria-label="{{label}} preview"
           ></canvas>
-          <div class="rsds-manager-preview-empty" data-preview-empty>No image</div>
+          <div class="rsds-manager-preview-empty">No image</div>
           <span class="rsds-manager-preview-text" data-preview-text>{{previewAmount}}</span>
         </div>
 
@@ -47,6 +47,11 @@
               <button type="button" class="rsds-manager-sound-button" data-action="test-sound" data-type="{{type}}">
                 Test Sound
               </button>
+              {{#if bundledArt}}
+                <button type="button" data-action="bundled-art" data-type="{{type}}" data-tooltip="Use the module's pre-colored {{label}} splat (turns tint off)">
+                  Bundled Art
+                </button>
+              {{/if}}
               <button type="button" class="rsds-manager-remove" data-action="reset" data-type="{{type}}">
                 Reset
               </button>
@@ -62,7 +67,7 @@
                   name="styles.{{type}}.image"
                   value="{{image}}"
                   spellcheck="false"
-                  placeholder="modules/rs-damage-splats/assets/{{label}}Splat.webp"
+                  placeholder="Empty uses the tint base or default splat"
                 />
                 <button
                   type="button"
@@ -82,7 +87,7 @@
                   name="styles.{{type}}.sound"
                   value="{{sound}}"
                   spellcheck="false"
-                  placeholder="modules/rs-damage-splats/assets/rssplathit.ogg"
+                  placeholder="Empty uses the default splat sound"
                 />
                 <button
                   type="button"
@@ -100,7 +105,7 @@
               <input
                 type="checkbox"
                 name="styles.{{type}}.enabled"
-                aria-label="Enable {{label}} splat"
+                aria-label="Show {{label}} splats"
                 {{#if enabled}}checked{{/if}}
               />
               <span>Enabled</span>
@@ -128,8 +133,7 @@
                 type="color"
                 class="rsds-manager-color-input"
                 name="styles.{{type}}.text"
-                value="{{#if text}}{{text}}{{else}}#FFF7BD{{/if}}"
-                data-default-color="#FFF7BD"
+                value="{{textColor}}"
                 aria-label="{{label}} text color"
               />
             </label>
@@ -146,8 +150,7 @@
                 type="color"
                 class="rsds-manager-color-input"
                 name="styles.{{type}}.tint"
-                value="{{#if tint}}{{tint}}{{else}}#FF0000{{/if}}"
-                data-default-color="#FF0000"
+                value="{{tintColor}}"
                 aria-label="{{label}} tint color"
               />
             </label>
@@ -162,9 +165,9 @@
       <i class="fas fa-check"></i>
       Apply Styles
     </button>
-    <button type="submit" class="rsds-manager-save" data-action="save">
+    <button type="submit" class="rsds-manager-save">
       <i class="fas fa-save"></i>
       Save Styles
     </button>
   </footer>
-</form>
+</div>

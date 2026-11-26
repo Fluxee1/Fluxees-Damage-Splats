@@ -1,4 +1,45 @@
-const MODULE_ID = "rs-damage-splats";
+import {
+  MODULE_ID,
+  DEFAULT_REGULAR_SPLAT,
+  DEFAULT_HEAL_SPLAT,
+  DEFAULT_TEMP_HP_SPLAT,
+  DEFAULT_SPLAT_SOUND,
+  DEFAULT_FONT_PATH,
+  DEFAULT_TEXT_COLOR,
+  DEFAULT_TINT_PICKER_COLOR,
+  TYPE_ORDER,
+  BUNDLED_TYPE_ART,
+  IMAGE_MODE_LABELS,
+  NativeTextGate,
+  aggregateTypedDamage,
+  collectWorkflowIdsFromUpdateOptions,
+  computeSplatOffsets,
+  cssUrl,
+  detectHpUpdate,
+  detectMaxHpDelta,
+  detectTempHpDelta,
+  findBestPendingCandidateGroup,
+  flattenDamageCandidates,
+  getDefaultDamageTypeStyles,
+  isNumericScrollingText,
+  maxHpPathsFor,
+  mergePhaseEntriesByType,
+  mergeStoredStyles,
+  normalizeDamageType,
+  planSplatsForChange,
+  previewKindForType,
+  resolveSplatVisual,
+  sanitizeStyleRecord,
+  scaleTypedDamage,
+  selectTargetDamageTypes,
+  shouldReplacePendingEntry,
+  splitDamageAcrossTypes,
+  splitPaths,
+  toCssHexColor,
+  tokenIdFromUuid,
+  typeLabel
+} from "./splat-core.mjs";
+
 const DEFAULT_HP_PATHS = [
   "system.attributes.hp.value",
   "system.hp.value",
@@ -14,57 +55,25 @@ const DEFAULT_TEMP_HP_PATHS = [
   "system.hitPoints.temp",
   "system.resources.hp.temp"
 ];
-const DEFAULT_REGULAR_SPLAT = "modules/rs-damage-splats/assets/regularsplat.webp";
-const DEFAULT_HEAL_SPLAT = "modules/rs-damage-splats/assets/healsplat.webp";
-const DEFAULT_TEMP_HP_SPLAT = "modules/rs-damage-splats/assets/temphpsplat.webp";
-const DEFAULT_TINT_SPLAT = "modules/rs-damage-splats/assets/splattint.webp";
-const DEFAULT_HEAL_TINT_SPLAT = "modules/rs-damage-splats/assets/healtint.webp";
-const DEFAULT_SPLAT_SOUND = "modules/rs-damage-splats/assets/rssplathit.ogg";
-const DEFAULT_FONT_PATH = "modules/rs-damage-splats/assets/runescape_uf.ttf";
-const PENDING_TYPED_DAMAGE_TTL_MS = 15000;
-const TYPE_ORDER = [
-  "heal",
-  "temp-hp",
-  "acid",
-  "bludgeoning",
-  "cold",
-  "fire",
-  "force",
-  "lightning",
-  "necrotic",
-  "piercing",
-  "poison",
-  "psychic",
-  "radiant",
-  "slashing",
-  "thunder",
-  "untyped"
-];
-const TYPE_LABELS = {
-  heal: "Healing",
-  "temp-hp": "Temp HP",
-  acid: "Acid",
-  bludgeoning: "Bludgeoning",
-  cold: "Cold",
-  fire: "Fire",
-  force: "Force",
-  lightning: "Lightning",
-  necrotic: "Necrotic",
-  piercing: "Piercing",
-  poison: "Poison",
-  psychic: "Psychic",
-  radiant: "Radiant",
-  slashing: "Slashing",
-  thunder: "Thunder",
-  untyped: "Untyped"
-};
+// Manual Midi-QOL damage application can happen well after the damage roll. Keep
+// the target-specific breakdown long enough for a GM to review and apply it.
+const PENDING_TYPED_DAMAGE_TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING_TYPED_DAMAGE_ENTRIES = 500;
+// An HP write that changes nothing only borrows a typed roll this recent (or one
+// whose workflow id is on the update), so a stale cached roll is never replayed.
+const CLAMPED_UPDATE_MAX_AGE_MS = 20 * 1000;
+
 const pendingTypedDamageStore = new Map();
+const nativeTextGate = new NativeTextGate();
+const missingTextureWarnings = new Set();
+const styleCache = { raw: null, styles: null };
 let splatSocket = null;
 let socketReady = false;
 let socketlibHookFired = false;
 
 Hooks.once("init", () => {
   registerSettings();
+  registerFontDefinition();
 });
 
 Hooks.once("socketlib.ready", () => {
@@ -75,18 +84,12 @@ Hooks.once("socketlib.ready", () => {
 Hooks.once("ready", () => {
   loadRuneScapeFont();
   patchNativeScrollingText();
-  patchTokenScrollingText();
   registerMidiQolHooks();
-  const socketlibActive = game.modules.get("socketlib")?.active;
-  if (!socketlibActive) {
-    console.warn(`${MODULE_ID} | socketlib is not active. Splats will only render locally.`);
+  if (!game.modules.get("socketlib")?.active) {
+    console.warn(`${MODULE_ID} | socketlib is not active. Splats will only render on the client that changed HP.`);
     return;
   }
-
-  if (!socketReady) {
-    ensureSocketRegistration("ready");
-  }
-
+  if (!socketReady) ensureSocketRegistration("ready");
   if (!socketReady) {
     console.warn(`${MODULE_ID} | socketlib is active but the module socket is not ready yet. Splats may render locally only.`, {
       socketlibHookFired,
@@ -95,218 +98,105 @@ Hooks.once("ready", () => {
   }
 });
 
-Hooks.on("preUpdateActor", (actor, change, options) => {
-  if (!game.user?.isGM) return;
-
-  const tokens = findTargetTokens(actor, options);
-  const hpDelta = detectHpDelta(actor, change);
-  const tempHpDelta = detectTempHpDelta(actor, change);
-
-  if (!hpDelta && !tempHpDelta) {
-    debugLog("No HP delta detected for actor update.", { actor: actor.name, change });
-    return;
-  }
-
-  if (!tokens.length) {
-    debugLog("HP or temp HP delta detected, but no active token was found.", {
-      actor: actor.name,
-      hpDelta,
-      tempHpDelta
-    });
-    return;
-  }
-
-  if (tempHpDelta?.kind === "gain") {
-    debugLog("Displaying temp HP splat.", {
-      actor: actor.name,
-      amount: tempHpDelta.amount,
-      kind: tempHpDelta.kind,
-      tokenCount: tokens.length
-    });
-
-    broadcastSplatEvents(tokens, [{
-      damage: tempHpDelta.amount,
-      damageType: "temp-hp",
-      kind: "temp-hp"
-    }], { actorName: actor.name });
-  }
-
-  const absorbedDamage = tempHpDelta?.kind === "loss" ? tempHpDelta.amount : 0;
-  const hpDamage = hpDelta?.kind === "damage" ? hpDelta.amount : 0;
-  const totalDamage = absorbedDamage + hpDamage;
-
-  if (totalDamage > 0) {
-    const typedEntry = consumePendingTypedDamage(actor, tokens, totalDamage);
-    if (typedEntry?.types?.length) {
-      debugLog("Displaying typed splats on HP application.", {
-        actor: actor.name,
-        totalDamage,
-        typedDamage: typedEntry.types
-      });
-
-      broadcastSplatEvents(
-        tokens,
-        typedEntry.types.map((entry) => ({
-          damage: entry.damage,
-          damageType: entry.type,
-          kind: "damage"
-        })),
-        { actorName: actor.name, typed: true }
-      );
-      return;
-    }
-
-    debugLog("Displaying fallback damage splat.", {
-      actor: actor.name,
-      amount: totalDamage,
-      tokenCount: tokens.length,
-      absorbedDamage,
-      hpDamage
-    });
-
-    broadcastSplatEvents(tokens, [{
-      damage: totalDamage,
-      damageType: "untyped",
-      kind: "damage"
-    }], { actorName: actor.name, fallback: true });
-    return;
-  }
-
-  if (!hpDelta) return;
-
-  if (hpDelta.kind === "heal") {
-    debugLog("Displaying heal splat.", {
-      actor: actor.name,
-      amount: hpDelta.amount,
-      tokenCount: tokens.length
-    });
-
-    broadcastSplatEvents(tokens, [{
-      damage: hpDelta.amount,
-      damageType: "heal",
-      kind: "heal"
-    }], { actorName: actor.name });
-    return;
+// Pre-update hooks only run on the client that makes the change, so every client
+// (player or GM) reports its own HP changes. The active GM turns the report into
+// splats, because it holds the Midi-QOL typed damage cache.
+Hooks.on("preUpdateActor", (actor, change, options, userId) => {
+  if (userId && userId !== game.user?.id) return;
+  try {
+    const report = buildChangeReport(actor, change, options);
+    if (report) dispatchChangeReport(report);
+  } catch (error) {
+    console.error(`${MODULE_ID} | Failed to read an HP change.`, error);
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* Settings                                                           */
+/* ------------------------------------------------------------------ */
+
 function registerSettings() {
-  game.settings.register(MODULE_ID, "hpPaths", {
+  const world = (key, data) => game.settings.register(MODULE_ID, key, { scope: "world", config: true, ...data });
+
+  world("hpPaths", {
     name: "HP data paths",
     hint: "Comma-separated actor data paths checked when HP changes.",
-    scope: "world",
-    config: true,
     type: String,
     default: DEFAULT_HP_PATHS.join(", ")
   });
-
-  game.settings.register(MODULE_ID, "useMidiQolTypedDamage", {
+  world("useMidiQolTypedDamage", {
     name: "Use Midi-QOL typed damage",
     hint: "When Midi-QOL is active, use its typed damage breakdown to create per-type splats.",
-    scope: "world",
-    config: true,
     type: Boolean,
     default: true
   });
-
-  game.settings.register(MODULE_ID, "regularSplatPath", {
+  world("regularSplatPath", {
     name: "Regular splat image",
-    hint: "Image shown for standard damage splats.",
-    scope: "world",
-    config: true,
+    hint: "Image shown for damage types with no image or tint of their own.",
     type: String,
     default: DEFAULT_REGULAR_SPLAT
   });
-
-  game.settings.register(MODULE_ID, "tempHpPaths", {
+  world("tempHpPaths", {
     name: "Temp HP data paths",
     hint: "Comma-separated actor data paths checked when temporary HP changes.",
-    scope: "world",
-    config: true,
     type: String,
     default: DEFAULT_TEMP_HP_PATHS.join(", ")
   });
-
-  game.settings.register(MODULE_ID, "healSplatPath", {
+  world("healSplatPath", {
     name: "Heal splat image",
-    hint: "Image shown when an actor regains HP.",
-    scope: "world",
-    config: true,
+    hint: "Image shown when an actor regains HP and Healing has no image or tint of its own.",
     type: String,
     default: DEFAULT_HEAL_SPLAT
   });
-
-  game.settings.register(MODULE_ID, "tempHpSplatPath", {
+  world("tempHpSplatPath", {
     name: "Temp HP splat image",
-    hint: "Image shown when temporary HP changes.",
-    scope: "world",
-    config: true,
+    hint: "Image shown when temporary HP is gained and Temp HP has no image or tint of its own.",
     type: String,
     default: DEFAULT_TEMP_HP_SPLAT
   });
-
-  game.settings.register(MODULE_ID, "splatScale", {
+  world("splatScale", {
     name: "Splat scale",
     hint: "Overall size multiplier for splats and damage numbers. 0.5 is about half size.",
-    scope: "world",
-    config: true,
     type: Number,
     default: 0.5
   });
-
-  game.settings.register(MODULE_ID, "durationMs", {
+  world("durationMs", {
     name: "Splat duration (ms)",
     hint: "Total time the splat stays on screen, in milliseconds.",
-    scope: "world",
-    config: true,
     type: Number,
     default: 2000
   });
-
-  game.settings.register(MODULE_ID, "multiSplatSpread", {
+  world("multiSplatSpread", {
     name: "Multi-splat spread",
     hint: "Controls how far apart multi-type splats step from center.",
-    scope: "world",
-    config: true,
     type: Number,
     default: 0.18
   });
-
-  game.settings.register(MODULE_ID, "multiSplatGap", {
+  world("multiSplatGap", {
     name: "Multi-splat gap",
     hint: "Pixel gap between multiple splats after sizing is applied.",
-    scope: "world",
-    config: true,
     type: Number,
     default: 0
   });
-
-  game.settings.register(MODULE_ID, "multiSplatArc", {
+  world("multiSplatArc", {
     name: "Multi-splat arc lift",
     hint: "How much the outer splats lift upward in a multi-hit group.",
-    scope: "world",
-    config: true,
     type: Number,
     default: 0.12
   });
-
-  game.settings.register(MODULE_ID, "fontPath", {
+  world("fontPath", {
     name: "RuneScape font path",
     hint: "TTF font used for the damage numbers.",
-    scope: "world",
-    config: true,
     type: String,
     default: DEFAULT_FONT_PATH,
     onChange: () => loadRuneScapeFont()
   });
-
-  game.settings.register(MODULE_ID, "fontFamily", {
+  world("fontFamily", {
     name: "Font family name",
     hint: "Font family used when drawing damage numbers.",
-    scope: "world",
-    config: true,
     type: String,
-    default: "RuneScape UF"
+    default: "RuneScape UF",
+    onChange: () => loadRuneScapeFont()
   });
 
   game.settings.register(MODULE_ID, "damageTypeStyles", {
@@ -321,7 +211,7 @@ function registerSettings() {
   game.settings.registerMenu(MODULE_ID, "damageTypeStylesMenu", {
     name: "Damage Type Styles",
     label: "Configure",
-    hint: "Choose custom splat images, text colors, and preview each type.",
+    hint: "Choose splat images, tints, text colors and sounds per type, and preview each one.",
     icon: "fas fa-burst",
     type: DamageTypeStylesConfig,
     restricted: true
@@ -335,25 +225,18 @@ function registerSettings() {
     type: Boolean,
     default: false
   });
-
-  game.settings.register(MODULE_ID, "hideNativeScrollingText", {
+  world("hideNativeScrollingText", {
     name: "Hide native damage/healing numbers",
-    hint: "Suppresses Foundry's built-in floating combat numbers when they are simple numeric HP changes.",
-    scope: "world",
-    config: true,
+    hint: "Hides Foundry's floating number on a token when a splat is shown for that token. Numbers with no splat still appear.",
     type: Boolean,
     default: true
   });
-
-  game.settings.register(MODULE_ID, "defaultSplatSoundPath", {
+  world("defaultSplatSoundPath", {
     name: "Default splat sound path",
     hint: "Default sound used by damage types with sound enabled and no custom path.",
-    scope: "world",
-    config: true,
     type: String,
     default: DEFAULT_SPLAT_SOUND
   });
-
   game.settings.register(MODULE_ID, "enableSplatSounds", {
     name: "Enable splat sounds",
     hint: "Play hitsplat sounds on this client.",
@@ -364,1179 +247,139 @@ function registerSettings() {
   });
 }
 
-function getDefaultDamageTypeStyles() {
-  const styleMap = {};
-  const tintDrivenTypes = new Set([
-    "acid",
-    "cold",
-    "fire",
-    "force",
-    "lightning",
-    "necrotic",
-    "poison",
-    "psychic",
-    "radiant",
-    "thunder",
-    "untyped"
-  ]);
-  const explicitImages = {
-    heal: DEFAULT_HEAL_SPLAT,
-    acid: DEFAULT_TINT_SPLAT,
-    cold: DEFAULT_TINT_SPLAT,
-    fire: DEFAULT_TINT_SPLAT,
-    force: DEFAULT_TINT_SPLAT,
-    lightning: DEFAULT_TINT_SPLAT,
-    necrotic: DEFAULT_TINT_SPLAT,
-    poison: DEFAULT_TINT_SPLAT,
-    psychic: DEFAULT_TINT_SPLAT,
-    radiant: DEFAULT_TINT_SPLAT,
-    thunder: DEFAULT_TINT_SPLAT,
-    untyped: DEFAULT_TINT_SPLAT
-  };
-
-  for (const type of TYPE_ORDER) {
-    const title = TYPE_LABELS[type];
-    const defaultImage =
-      type === "temp-hp"
-        ? DEFAULT_TEMP_HP_SPLAT
-        : explicitImages[type] ?? "";
-
-    styleMap[type] = {
-      label: title,
-      enabled: true,
-      image: defaultImage,
-      soundEnabled: type !== "heal" && type !== "temp-hp",
-      sound: "",
-      tint: tintDrivenTypes.has(type) ? getDefaultTintColorForType(type) : "",
-      text: ""
-    };
-  }
-
-  return styleMap;
+function setting(key) {
+  return game.settings.get(MODULE_ID, key);
 }
 
 function getStoredDamageTypeStyles() {
-  const rawValue = game.settings.get(MODULE_ID, "damageTypeStyles");
-
+  const raw = setting("damageTypeStyles");
+  if (styleCache.raw === raw && styleCache.styles) return styleCache.styles;
+  let styles;
   try {
-    const parsed = JSON.parse(rawValue);
-    if (!parsed || typeof parsed !== "object") throw new Error("Style map is not an object.");
-
-    const merged = foundry.utils.deepClone(getDefaultDamageTypeStyles());
-    for (const [rawType, rawConfig] of Object.entries(parsed)) {
-      const type = normalizeDamageType(rawType);
-      const existing = merged[type] ?? {
-        label: TYPE_LABELS[type] ?? toTitleCase(type),
-        enabled: true,
-        image: "",
-        tint: "",
-        text: ""
-      };
-
-      merged[type] = {
-        ...existing,
-        ...sanitizeStyleRecord(rawConfig, existing.label)
-      };
-
-      if (type === "heal" || type === "temp-hp") {
-        merged[type].soundEnabled = Boolean(rawConfig?.soundEnabled);
-        merged[type].sound = String(rawConfig?.sound ?? "").trim();
-      }
-    }
-
-    return merged;
+    styles = mergeStoredStyles(raw);
   } catch (error) {
     console.warn(`${MODULE_ID} | Could not parse damage type styles. Falling back to defaults.`, error);
-    return getDefaultDamageTypeStyles();
+    styles = getDefaultDamageTypeStyles();
   }
+  styleCache.raw = raw;
+  styleCache.styles = styles;
+  return styles;
 }
 
-function sanitizeStyleRecord(rawConfig, fallbackLabel) {
+function getSplatVisual(damageType, styles = getStoredDamageTypeStyles()) {
+  const type = normalizeDamageType(damageType ?? "untyped");
+  return resolveSplatVisual(type, styles[type], {
+    regular: setting("regularSplatPath"),
+    heal: setting("healSplatPath"),
+    tempHp: setting("tempHpSplatPath"),
+    sound: setting("defaultSplatSoundPath")
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* HP change reports                                                  */
+/* ------------------------------------------------------------------ */
+
+function buildChangeReport(actor, change, options) {
+  const hpPaths = splitPaths(setting("hpPaths"));
+  const hpUpdate = detectHpUpdate(actor, change, hpPaths);
+  const tempHpDelta = detectTempHpDelta(actor, change, splitPaths(setting("tempHpPaths")));
+  const maxHpDelta = detectMaxHpDelta(actor, change, maxHpPathsFor(hpPaths));
+  if (!hpUpdate && !tempHpDelta && maxHpDelta?.kind !== "damage") return null;
+
+  const tokenUuids = new Set(findTargetTokens(actor, options).map((token) => token.document?.uuid).filter(Boolean));
+  // An unlinked token's actor belongs to exactly one token, even on a scene this client isn't viewing.
+  if (actor.isToken && actor.token?.uuid) tokenUuids.add(actor.token.uuid);
   return {
-    label: String(rawConfig?.label ?? fallbackLabel ?? "").trim() || fallbackLabel,
-    enabled: rawConfig?.enabled !== false,
-    image: String(rawConfig?.image ?? "").trim(),
-    soundEnabled: rawConfig?.soundEnabled !== false,
-    sound: String(rawConfig?.sound ?? "").trim(),
-    tint: String(rawConfig?.tint ?? "").trim(),
-    text: String(rawConfig?.text ?? "").trim()
+    actorUuid: actor.uuid,
+    actorId: actor.id,
+    actorName: actor.name,
+    tokenUuids: Array.from(tokenUuids),
+    hpUpdate,
+    tempHpDelta,
+    maxHpDelta,
+    workflowIds: Array.from(collectWorkflowIdsFromUpdateOptions(options)),
+    fromUserId: game.user?.id ?? null
   };
 }
 
-function getDefaultTintColorForType(type) {
-  const tintMap = {
-    acid: "#C8F36B",
-    cold: "#9DE7FF",
-    fire: "#FF8C69",
-    force: "#D6A8FF",
-    lightning: "#FFF1A8",
-    necrotic: "#B48DFF",
-    poison: "#B3E36D",
-    psychic: "#FF9ADE",
-    radiant: "#FFE58A",
-    thunder: "#CDB6FF",
-    untyped: "#FFFFFF"
-  };
-
-  return tintMap[normalizeDamageType(type)] ?? "";
-}
-
-function registerMidiQolHooks() {
-  if (!game.modules.get("midi-qol")?.active) {
-    debugLog("Midi-QOL is not active. Typed damage splats are disabled.");
+function dispatchChangeReport(report) {
+  const gm = game.users?.activeGM;
+  if (gm && !gm.isSelf && socketReady && splatSocket) {
+    debugLog("Sending HP change to the active GM.", { actor: report.actorName, gm: gm.name });
+    void splatSocket.executeAsUser("processChangeReport", gm.id, report).catch((error) => {
+      console.warn(`${MODULE_ID} | Could not reach the GM. Showing splats from this client instead.`, error);
+      processChangeReport(report);
+    });
     return;
   }
-
-  Hooks.on("midi-qol.DamageRollComplete", (workflow) => {
-    if (!game.settings.get(MODULE_ID, "useMidiQolTypedDamage")) return;
-    cacheMidiQolWorkflow(workflow);
-  });
-
-  debugLog("Registered Midi-QOL typed damage hook on midi-qol.DamageRollComplete.");
+  processChangeReport(report);
 }
 
-function cacheMidiQolWorkflow(workflow) {
-  try {
-    const damageEntries = extractMidiDamageEntries(workflow);
-    if (!damageEntries.length) {
-      debugLog("Midi-QOL workflow had no typed damage entries.", { workflow });
-      return;
-    }
-
-    if (!game.user?.isGM) {
-      forwardTypedDamageEntriesToGM(workflow, damageEntries);
-      return;
-    }
-
-    for (const entry of damageEntries) {
-      if (!entry.actor || !entry.types.length) continue;
-      storePendingTypedDamage(entry.actor, entry.token, workflow, entry.types, entry.source, entry.phases);
-      debugLog("Cached typed Midi-QOL splats for HP application.", {
-        actor: entry.actor.name,
-        token: entry.token?.name,
-        source: entry.source,
-        phases: entry.phases,
-        types: entry.types
-      });
-    }
-  } catch (error) {
-    console.error(`${MODULE_ID} | Failed to process Midi-QOL typed damage.`, error);
+function processChangeReport(report) {
+  if (!report?.actorUuid) return;
+  const tokenRefs = (report.tokenUuids ?? []).map((uuid) => ({ id: tokenIdFromUuid(uuid), uuid }));
+  if (!tokenRefs.length) {
+    const actor = fromUuidSync(report.actorUuid);
+    for (const token of actor ? findTargetTokens(actor) : []) tokenRefs.push({ id: token.id, uuid: token.document.uuid });
   }
-}
+  const actorRef = { id: report.actorId, uuid: report.actorUuid, name: report.actorName };
+  const workflowIds = new Set(report.workflowIds ?? []);
 
-function extractMidiDamageEntries(workflow) {
-  const rawDamageList = Array.isArray(workflow?.damageList)
-    ? workflow.damageList
-    : Array.isArray(workflow?.damageData)
-      ? workflow.damageData
-      : [];
+  const plan = planSplatsForChange(report, (appliedDamage, consumeOptions) =>
+    consumePendingTypedDamage(actorRef, tokenRefs, appliedDamage, workflowIds, consumeOptions)
+  );
+  debugLog("Planned splats for HP change.", { actor: report.actorName, reason: plan.reason, entries: plan.entries, tokens: tokenRefs });
+  if (!plan.entries.length) return;
 
-  const targetEntries = rawDamageList
-    .map((item) => buildMidiDamageEntry(item, workflow))
-    .filter(Boolean);
-
-  if (targetEntries.length) return targetEntries;
-
-  const workflowWideTypes = collectTypedDamageFromMidiWorkflow(workflow);
-  if (!workflowWideTypes.length) return [];
-
-  return findWorkflowTargets(workflow)
-    .map((token) => ({
-      actor: token.actor,
-      token,
-      source: "workflow-item-fallback",
-      phases: workflowWideTypes.map((entry) => ({
-        phase: "save-burst",
-        type: entry.type,
-        damage: entry.damage
-      })),
-      types: workflowWideTypes
+  broadcastSplats({
+    actorUuid: report.actorUuid,
+    tokenUuids: tokenRefs.map((ref) => ref.uuid).filter(Boolean),
+    entries: plan.entries.map((entry) => ({
+      damage: Number(entry.damage) || 0,
+      damageType: normalizeDamageType(entry.damageType ?? "untyped"),
+      kind: entry.kind ?? "damage"
     }))
-    .filter((entry) => entry.actor && entry.types.length);
-}
-
-function buildMidiDamageEntry(item, workflow) {
-  const token = findTokenFromMidiItem(item);
-  const actor = token?.actor ?? findActorFromMidiItem(item);
-  if (!actor) return null;
-
-  const resolved = resolveTypedDamageForTarget(item, workflow, token, actor);
-  const typedDamage = resolved.types.filter((entry) => entry.damage > 0);
-  if (!typedDamage.length) return null;
-
-  return {
-    actor,
-    token,
-    phases: resolved.phases,
-    source: resolved.source,
-    types: typedDamage
-  };
-}
-
-function findTokenFromMidiItem(item) {
-  const tokenId = item?.tokenId ?? item?.tokenUuid?.split(".").at(-1);
-  if (tokenId && canvas?.tokens) {
-    const token = canvas.tokens.get(tokenId);
-    if (token) return token;
-  }
-
-  const actorId = item?.actorId ?? item?.actorUuid?.split(".").at(-1);
-  if (actorId) {
-    return (canvas?.tokens?.placeables ?? []).find((token) => token.actor?.id === actorId) ?? null;
-  }
-
-  return null;
-}
-
-function findActorFromMidiItem(item) {
-  const actorId = item?.actorId ?? item?.actorUuid?.split(".").at(-1);
-  if (!actorId) return null;
-  return game.actors?.get(actorId) ?? null;
-}
-
-function resolveTypedDamageForTarget(item, workflow, token, actor) {
-  const explicit = collectExplicitTypedDamage(item, workflow);
-  const derivedPhases = inferTypedPhaseEntriesForTarget(item, workflow, token, actor);
-  const derived = inferTypedDamageForTarget(item, workflow, token, actor);
-  const explicitConcrete = explicit.filter((entry) => entry.type !== "untyped");
-  const derivedConcrete = derived.filter((entry) => entry.type !== "untyped");
-
-  if (explicitConcrete.length && explicitConcrete.length >= derivedConcrete.length) {
-    return {
-      source: "explicit-midi-detail",
-      phases: deriveWorkflowPhases(workflow, token, actor, explicitConcrete),
-      types: explicitConcrete
-    };
-  }
-
-  if (derivedConcrete.length) {
-    return {
-      source: "workflow-item-fallback",
-      phases: derivedPhases,
-      types: derivedConcrete
-    };
-  }
-
-  if (explicit.length) {
-    return {
-      source: "explicit-midi-untyped",
-      phases: deriveWorkflowPhases(workflow, token, actor, explicit),
-      types: explicit
-    };
-  }
-
-  return { source: "none", phases: [], types: [] };
-}
-
-function collectExplicitTypedDamage(item, workflow) {
-  const itemSpecificCandidates = [
-    item?.damageDetail,
-    item?.damageDetails,
-    item?.damageDetailApplied,
-    item?.appliedDamageDetail,
-    item?.calcDamageOptions?.damageDetail,
-    item?.calcDamageOptions?.damageDetails
-  ];
-  const workflowWideCandidates = [
-    workflow?.damageDetail,
-    workflow?.damageDetails,
-    workflow?.damageItem?.damageDetail,
-    workflow?.damageItem?.damageDetails
-  ];
-
-  return aggregateTypedDamage(
-    itemSpecificCandidates.some(Array.isArray) ? itemSpecificCandidates : workflowWideCandidates
-  );
-}
-
-function collectTypedDamageFromMidiWorkflow(workflow) {
-  const aggregated = aggregateTypedDamage([
-    workflow?.damageDetail,
-    workflow?.damageDetails,
-    workflow?.damageItem?.damageDetail,
-    workflow?.damageItem?.damageDetails,
-    workflow?.workflowOptions?.damageDetail,
-    workflow?.workflowOptions?.damageDetails
-  ]);
-
-  if (aggregated.length) return aggregated;
-  return collectTypedDamageFromWorkflowItem(workflow);
-}
-
-function aggregateTypedDamage(detailCandidates) {
-  const aggregated = new Map();
-
-  for (const candidate of detailCandidates) {
-    for (const rawEntry of flattenDamageCandidates(candidate)) {
-      const normalizedEntries = normalizeDamageDetailEntry(rawEntry);
-      for (const normalized of normalizedEntries) {
-        const current = aggregated.get(normalized.type) ?? {
-          type: normalized.type,
-          damage: 0
-        };
-        current.damage += normalized.damage;
-        aggregated.set(normalized.type, current);
-      }
-    }
-  }
-
-  return Array.from(aggregated.values()).filter((entry) => entry.damage > 0);
-}
-
-function flattenDamageCandidates(candidate) {
-  if (!candidate) return [];
-  if (Array.isArray(candidate)) return candidate.flatMap((entry) => flattenDamageCandidates(entry));
-
-  if (typeof candidate === "object") {
-    if ("type" in candidate || "damageType" in candidate || "damage" in candidate || "value" in candidate || "amount" in candidate) {
-      return [candidate];
-    }
-
-    return Object.values(candidate).flatMap((entry) => flattenDamageCandidates(entry));
-  }
-
-  return [];
-}
-
-function normalizeDamageDetailEntry(rawEntry) {
-  if (!rawEntry) return [];
-  if (Array.isArray(rawEntry)) return rawEntry.flatMap((entry) => normalizeDamageDetailEntry(entry));
-  if (typeof rawEntry === "number") return rawEntry > 0 ? [{ type: "untyped", damage: rawEntry }] : [];
-  if (typeof rawEntry === "string") return [];
-
-  const nestedCandidates = [
-    rawEntry.damageDetail,
-    rawEntry.damageDetails,
-    rawEntry.details,
-    rawEntry.breakdown,
-    rawEntry.byType
-  ].filter((value) => value !== undefined);
-
-  if (nestedCandidates.length) {
-    const nestedResults = nestedCandidates.flatMap((candidate) =>
-      flattenDamageCandidates(candidate).flatMap((entry) => normalizeDamageDetailEntry(entry))
-    );
-    if (nestedResults.length) return nestedResults;
-  }
-
-  const type = normalizeDamageType(
-    rawEntry.type ??
-    rawEntry.damageType ??
-    rawEntry.damageTypeId ??
-    rawEntry.kind ??
-    rawEntry.category ??
-    "untyped"
-  );
-
-  const damage = Number(
-    rawEntry.value ??
-    rawEntry.damage ??
-    rawEntry.appliedDamage ??
-    rawEntry.amount ??
-    rawEntry.total ??
-    0
-  );
-
-  return Number.isFinite(damage) && damage > 0 ? [{ type, damage }] : [];
-}
-
-function inferTypedDamageForTarget(item, workflow, token, actor) {
-  const phaseEntries = inferTypedPhaseEntriesForTarget(item, workflow, token, actor);
-  if (!phaseEntries.length) return [];
-
-  const merged = new Map();
-  for (const phase of phaseEntries) {
-    const type = normalizeDamageType(phase.type);
-    merged.set(type, (merged.get(type) ?? 0) + (Number(phase.damage) || 0));
-  }
-
-  return Array.from(merged.entries())
-    .map(([type, damage]) => ({ type, damage }))
-    .filter((entry) => entry.damage > 0);
-}
-
-function inferTypedPhaseEntriesForTarget(item, workflow, token, actor) {
-  const types = resolveTargetWorkflowDamageTypes(workflow, token, actor);
-  if (!types.length) return [];
-
-  const targetInfo = getWorkflowTargetInfo(workflow, token, actor);
-  const activityName = workflow?.activity?.constructor?.name ?? "";
-  const isAttackActivity = /Attack/i.test(activityName);
-  const isSaveActivity = /Save/i.test(activityName);
-  const isMixedAttackSaveWorkflow = isAttackActivity && types.length > 1 && (targetInfo.isAnySaveTarget || hasWorkflowSaveTargets(workflow));
-  const rollTotals = resolveWorkflowDamageRollTotals(workflow);
-
-  if (isMixedAttackSaveWorkflow && rollTotals.length >= 2) {
-    const phases = [];
-    const primaryDamage = rollTotals[0];
-    const secondaryDamage = rollTotals.slice(1).reduce((sum, value) => sum + value, 0);
-
-    if (targetInfo.isHitTarget && primaryDamage > 0) {
-      phases.push({
-        phase: "attack-hit",
-        type: types[0],
-        damage: primaryDamage
-      });
-    }
-
-    if (targetInfo.isAnySaveTarget && secondaryDamage > 0) {
-      const secondaryTypes = types.slice(1);
-      if (secondaryTypes.length === 1) {
-        phases.push({
-          phase: "save-burst",
-          type: secondaryTypes[0],
-          damage: secondaryDamage
-        });
-      } else {
-        phases.push(
-          ...splitDamageAcrossTypes(secondaryTypes, secondaryDamage).map((entry) => ({
-            phase: "save-burst",
-            type: entry.type,
-            damage: entry.damage
-          }))
-        );
-      }
-    }
-
-    if (phases.length) {
-      debugLog("Resolved mixed workflow phase entries.", {
-        actor: actor?.name,
-        token: token?.name,
-        item: workflow?.item?.name,
-        rollTotals,
-        targetInfo,
-        phases
-      });
-      return phases;
-    }
-  }
-
-  const totalDamage = resolveMidiItemAppliedDamage(item, workflow);
-  if (totalDamage <= 0) return [];
-
-  if (isSaveActivity) {
-    return types.map((type, index) => ({
-      phase: index === 0 ? "save-burst" : `save-burst-${index}`,
-      type,
-      damage: splitDamageAcrossTypes(types, totalDamage)[index]?.damage ?? 0
-    })).filter((entry) => entry.damage > 0);
-  }
-
-  if (types.length === 1) {
-    return [{
-      phase: isAttackActivity ? "attack-hit" : "damage",
-      type: types[0],
-      damage: totalDamage
-    }];
-  }
-
-  return splitDamageAcrossTypes(types, totalDamage).map((entry, index) => ({
-    phase: index === 0 && isAttackActivity ? "attack-hit" : "save-burst",
-    type: entry.type,
-    damage: entry.damage
-  }));
-}
-
-function splitDamageAcrossTypes(types, totalDamage) {
-  const evenSplit = Math.floor(totalDamage / types.length);
-  let remainder = totalDamage - evenSplit * types.length;
-
-  return types.map((type) => {
-    const bonus = remainder > 0 ? 1 : 0;
-    remainder -= bonus;
-    return { type, damage: evenSplit + bonus };
-  }).filter((entry) => entry.damage > 0);
-}
-
-function collectTypedDamageFromWorkflowItem(workflow) {
-  const types = collectWorkflowItemDamageTypes(workflow);
-  if (!types.length) return [];
-
-  const totalDamage = resolveWorkflowTotalDamage(workflow);
-  if (totalDamage <= 0) return [];
-  if (types.length === 1) return [{ type: types[0], damage: totalDamage }];
-  return splitDamageAcrossTypes(types, totalDamage);
-}
-
-function collectWorkflowItemDamageTypes(workflow) {
-  const partsCandidates = [
-    workflow?.item?.system?.damage?.parts,
-    workflow?.item?.system?.damage?.value,
-    workflow?.item?.system?.formula?.parts,
-    workflow?.activity?.damage?.parts,
-    workflow?.activity?.damage?.value,
-    workflow?.item?.system?.activities,
-    workflow?.item?.system?.activities?.contents
-  ];
-
-  const types = [];
-  for (const candidate of partsCandidates) {
-    if (!candidate) continue;
-    for (const type of flattenDamagePartTypes(candidate)) {
-      if (type) types.push(type);
-    }
-  }
-
-  return Array.from(new Set(types));
-}
-
-function flattenDamagePartTypes(candidate) {
-  if (!candidate) return [];
-  if (Array.isArray(candidate)) return candidate.flatMap((part) => flattenDamagePartTypes(part));
-
-  if (typeof candidate === "object") {
-    const directType = normalizeDamageType(
-      candidate.type ??
-      candidate.damageType ??
-      candidate.kind ??
-      ""
-    );
-
-    if (directType) return [directType];
-    return Object.values(candidate).flatMap((value) => flattenDamagePartTypes(value));
-  }
-
-  return [];
-}
-
-function resolveTargetWorkflowDamageTypes(workflow, token, actor) {
-  const orderedTypes = collectWorkflowItemDamageTypes(workflow);
-  if (orderedTypes.length <= 1) return orderedTypes;
-
-  const targetInfo = getWorkflowTargetInfo(workflow, token, actor);
-  const activityName = workflow?.activity?.constructor?.name ?? "";
-  const isSaveActivity = /Save/i.test(activityName);
-  const isAttackActivity = /Attack/i.test(activityName);
-
-  if (isSaveActivity) return orderedTypes;
-  if (isAttackActivity && targetInfo.isHitTarget && targetInfo.isFailedSaveTarget) return orderedTypes;
-  if (isAttackActivity && targetInfo.isHitTarget && !targetInfo.isFailedSaveTarget) return orderedTypes;
-  if (isAttackActivity && !targetInfo.isHitTarget && targetInfo.isFailedSaveTarget) return orderedTypes.slice(-1);
-  return orderedTypes;
-}
-
-function deriveWorkflowPhases(workflow, token, actor, typedEntries) {
-  const targetInfo = getWorkflowTargetInfo(workflow, token, actor);
-  const activityName = workflow?.activity?.constructor?.name ?? "";
-  const isAttackActivity = /Attack/i.test(activityName);
-  const isSaveActivity = /Save/i.test(activityName);
-
-  if (isSaveActivity) {
-    return typedEntries.map((entry) => ({
-      phase: "save-burst",
-      type: entry.type,
-      damage: entry.damage
-    }));
-  }
-
-  if (!isAttackActivity) {
-    return typedEntries.map((entry) => ({
-      phase: "damage",
-      type: entry.type,
-      damage: entry.damage
-    }));
-  }
-
-  if (typedEntries.length === 1) {
-    return [{
-      phase: targetInfo.isFailedSaveTarget ? "save-burst" : "attack-hit",
-      type: typedEntries[0].type,
-      damage: typedEntries[0].damage
-    }];
-  }
-
-  return typedEntries.map((entry, index) => ({
-    phase: index === 0 && targetInfo.isHitTarget ? "attack-hit" : "save-burst",
-    type: entry.type,
-    damage: entry.damage
-  }));
-}
-
-function getWorkflowTargetInfo(workflow, token, actor) {
-  const tokenId = token?.id ?? null;
-  const actorId = actor?.id ?? token?.actor?.id ?? null;
-
-  const matches = (collection) =>
-    normalizeTargetCollection(collection).some((candidate) =>
-      candidate?.id === tokenId || candidate?.actor?.id === actorId
-    );
-
-  return {
-    isHitTarget: matches(workflow?.hitTargets),
-    isFailedSaveTarget: matches(workflow?.failedSaves),
-    isTarget: matches(workflow?.targets),
-    isAnySaveTarget:
-      matches(workflow?.failedSaves) ||
-      matches(workflow?.saves) ||
-      matches(workflow?.superSavers) ||
-      matches(workflow?.semiSuperSavers)
-  };
-}
-
-function hasWorkflowSaveTargets(workflow) {
-  return [
-    workflow?.failedSaves,
-    workflow?.saves,
-    workflow?.superSavers,
-    workflow?.semiSuperSavers
-  ].some((collection) => normalizeTargetCollection(collection).length > 0);
-}
-
-function resolveWorkflowTotalDamage(workflow) {
-  const candidates = [
-    workflow?.damageTotal,
-    workflow?.damageItem?.hpDamage,
-    workflow?.damageItem?.appliedDamage,
-    workflow?.damageRoll?.total
-  ];
-
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric) && numeric > 0) return Math.round(numeric);
-  }
-
-  const rollTotals = Array.isArray(workflow?.damageRolls)
-    ? workflow.damageRolls.map((roll) => Number(roll?.total))
-    : [];
-  const sum = rollTotals.filter(Number.isFinite).reduce((acc, value) => acc + value, 0);
-  return sum > 0 ? Math.round(sum) : 0;
-}
-
-function resolveWorkflowDamageRollTotals(workflow) {
-  const totals = [];
-
-  if (Array.isArray(workflow?.damageRolls)) {
-    for (const roll of workflow.damageRolls) {
-      const numeric = Number(roll?.total);
-      if (Number.isFinite(numeric) && numeric > 0) totals.push(Math.round(numeric));
-    }
-  }
-
-  if (!totals.length) {
-    const single = Number(workflow?.damageRoll?.total);
-    if (Number.isFinite(single) && single > 0) totals.push(Math.round(single));
-  }
-
-  return totals;
-}
-
-function resolveMidiItemAppliedDamage(item, workflow) {
-  const candidates = [
-    item?.appliedDamage,
-    item?.hpDamage,
-    item?.totalDamage,
-    item?.damage,
-    item?.appliedTotal,
-    item?.newHP !== undefined && item?.oldHP !== undefined ? Number(item.oldHP) - Number(item.newHP) : undefined
-  ];
-
-  for (const candidate of candidates) {
-    const numeric = Number(candidate);
-    if (Number.isFinite(numeric) && numeric > 0) return Math.round(numeric);
-  }
-
-  return resolveWorkflowTotalDamage(workflow);
-}
-
-function findWorkflowTargets(workflow) {
-  const tokenSet = new Map();
-  const candidates = [
-    workflow?.hitTargets,
-    workflow?.targets,
-    workflow?.failedSaves,
-    workflow?.saves,
-    workflow?.superSavers,
-    workflow?.semiSuperSavers,
-    workflow?.applicationTargets,
-    workflow?.damageList?.map((entry) => entry?.tokenUuid ?? entry?.tokenId),
-    workflow?.damageData?.map?.((entry) => entry?.tokenUuid ?? entry?.tokenId)
-  ];
-
-  for (const candidate of candidates) {
-    for (const token of normalizeTargetCollection(candidate)) {
-      if (token?.id) tokenSet.set(token.id, token);
-    }
-  }
-
-  return Array.from(tokenSet.values());
-}
-
-function normalizeTargetCollection(candidate) {
-  if (!candidate) return [];
-  if (candidate instanceof Set) return Array.from(candidate).flatMap((entry) => normalizeTargetCollection(entry));
-  if (Array.isArray(candidate)) return candidate.flatMap((entry) => normalizeTargetCollection(entry));
-
-  if (typeof candidate === "string") {
-    const token = canvas?.tokens?.get(candidate) ?? canvas?.tokens?.placeables?.find((placeable) =>
-      placeable?.document?.uuid === candidate || placeable?.uuid === candidate
-    );
-    return token ? [token] : [];
-  }
-
-  if (candidate.object?.documentName === "Token") return [candidate.object];
-  if (candidate.documentName === "Token") return [candidate];
-  if (candidate.token?.documentName === "Token") return [candidate.token];
-  if (candidate.id && canvas?.tokens?.get(candidate.id)) return [canvas.tokens.get(candidate.id)];
-  return [];
-}
-
-function storePendingTypedDamage(actor, token, workflow, types, source = "unknown", phases = null) {
-  if (!actor?.uuid || !Array.isArray(types) || !types.length) return;
-
-  cleanupExpiredPendingTypedDamage();
-  const workflowId = getWorkflowCacheId(workflow);
-  const targetKey = buildPendingTargetKey(actor, token);
-  const phaseEntries = Array.isArray(phases) && phases.length
-    ? phases
-    : types.map((entry) => ({
-        phase: "damage",
-        type: entry.type,
-        damage: entry.damage
-      }));
-
-  for (const [index, phaseEntry] of phaseEntries.entries()) {
-    const storeKey = `${workflowId}::${targetKey}::${phaseEntry.phase}::${normalizeDamageType(phaseEntry.type)}::${index}`;
-    const pendingEntry = {
-      workflowId,
-      actorId: actor?.id ?? null,
-      actorUuid: actor?.uuid ?? null,
-      tokenId: token?.id ?? null,
-      tokenUuid: token?.document?.uuid ?? token?.uuid ?? null,
-      targetKey,
-      phase: phaseEntry.phase,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + PENDING_TYPED_DAMAGE_TTL_MS,
-      totalDamage: Number(phaseEntry.damage) || 0,
-      source,
-      types: [{
-        type: normalizeDamageType(phaseEntry.type),
-        damage: Number(phaseEntry.damage) || 0
-      }]
-    };
-
-    const stored = setPendingTypedDamageEntry(storeKey, pendingEntry, {
-      actorName: actor?.name,
-      tokenName: token?.name
-    });
-    if (!stored) continue;
-
-    debugLog("Stored pending typed damage entry.", {
-      storeKey,
-      actor: actor?.name,
-      token: token?.name,
-      workflowId,
-      phase: pendingEntry.phase,
-      source,
-      totalDamage: pendingEntry.totalDamage,
-      storeSize: pendingTypedDamageStore.size
-    });
-  }
-}
-
-function consumePendingTypedDamage(actor, tokens, appliedDamage) {
-  cleanupExpiredPendingTypedDamage();
-
-  const numericAppliedDamage = Number(appliedDamage) || 0;
-  const actorId = actor?.id ?? null;
-  const actorUuid = actor?.uuid ?? null;
-  const tokenIds = new Set((tokens ?? []).map((token) => token.id).filter(Boolean));
-  const tokenUuids = new Set((tokens ?? []).map((token) => token?.document?.uuid ?? token?.uuid).filter(Boolean));
-
-  if (!pendingTypedDamageStore.size) {
-    debugLog("No pending typed damage cache found for actor update.", {
-      actor: actor?.name,
-      appliedDamage
-    });
-    return null;
-  }
-
-  const candidates = Array.from(pendingTypedDamageStore.entries())
-    .map(([storeKey, entry]) => ({ storeKey, entry }))
-    .filter(({ entry }) => {
-      const actorMatch =
-        (actorUuid && entry.actorUuid === actorUuid) ||
-        (actorId && entry.actorId === actorId);
-      const tokenMatch =
-        !tokenIds.size ||
-        !entry.tokenId ||
-        tokenIds.has(entry.tokenId) ||
-        tokenUuids.has(entry.tokenUuid);
-      return actorMatch && tokenMatch;
-    });
-
-  debugLog("Looking up pending typed damage entry for actor update.", {
-    actor: actor?.name,
-    actorId,
-    actorUuid,
-    tokenIds: Array.from(tokenIds),
-    tokenUuids: Array.from(tokenUuids),
-    appliedDamage: numericAppliedDamage,
-    candidateCount: candidates.length,
-    storeSize: pendingTypedDamageStore.size
   });
-
-  if (!candidates.length) {
-    debugLog("No matching pending typed damage entry found for actor update.", {
-      actor: actor?.name,
-      actorId,
-      actorUuid,
-      tokenIds: Array.from(tokenIds),
-      tokenUuids: Array.from(tokenUuids),
-      appliedDamage,
-      pendingEntries: Array.from(pendingTypedDamageStore.values()).map((entry) => ({
-        workflowId: entry.workflowId,
-        phase: entry.phase,
-        actorId: entry.actorId,
-        actorUuid: entry.actorUuid,
-        tokenId: entry.tokenId,
-        tokenUuid: entry.tokenUuid,
-        totalDamage: entry.totalDamage,
-        source: entry.source
-      }))
-    });
-    return null;
-  }
-
-  const mergedCandidate = findBestPendingCandidateGroup(candidates, numericAppliedDamage);
-  if (!mergedCandidate) {
-    debugLog("No usable pending typed damage entry group found for actor update.", {
-      actor: actor?.name,
-      appliedDamage: numericAppliedDamage
-    });
-    return null;
-  }
-
-  for (const item of mergedCandidate.items) {
-    pendingTypedDamageStore.delete(item.storeKey);
-  }
-
-  const pending = {
-    workflowId: mergedCandidate.workflowId,
-    actorId,
-    actorUuid,
-    tokenId: Array.from(tokenIds)[0] ?? null,
-    tokenUuid: Array.from(tokenUuids)[0] ?? null,
-    source: mergedCandidate.source,
-    totalDamage: mergedCandidate.totalDamage,
-    types: mergedCandidate.types
-  };
-
-  debugLog("Matched and consumed pending typed damage entry.", {
-    actor: actor?.name,
-    workflowId: pending.workflowId,
-    source: pending.source,
-    appliedDamage: numericAppliedDamage,
-    cachedTotalDamage: pending.totalDamage,
-    phases: mergedCandidate.items.map((item) => item.entry.phase),
-    mergedTypes: pending.types,
-    remainingStoreSize: pendingTypedDamageStore.size
-  });
-
-  if (numericAppliedDamage <= 0) return null;
-  if (pending.totalDamage <= 0) return null;
-
-  if (Math.abs(pending.totalDamage - numericAppliedDamage) <= 0.01) {
-    debugLog("Consumed typed damage payload.", {
-      actor: actor?.name,
-      source: pending.source,
-      appliedDamage: numericAppliedDamage,
-      types: pending.types
-    });
-    return pending;
-  }
-
-  const scaled = {
-    ...pending,
-    totalDamage: numericAppliedDamage,
-    types: scaleTypedDamage(pending.types, numericAppliedDamage)
-  };
-
-  debugLog("Consumed scaled typed damage payload.", {
-    actor: actor?.name,
-    source: pending.source,
-    appliedDamage: numericAppliedDamage,
-    originalTotal: pending.totalDamage,
-    types: scaled.types
-  });
-  return scaled;
-}
-
-function findBestPendingCandidateGroup(candidates, targetDamage) {
-  const grouped = new Map();
-
-  for (const candidate of candidates) {
-    const key = `${candidate.entry.workflowId}::${candidate.entry.source}`;
-    const group = grouped.get(key) ?? {
-      workflowId: candidate.entry.workflowId,
-      source: candidate.entry.source,
-      items: []
-    };
-    group.items.push(candidate);
-    grouped.set(key, group);
-  }
-
-  const groups = Array.from(grouped.values()).map((group) => {
-    const mergedTypesMap = new Map();
-    let totalDamage = 0;
-
-    for (const item of group.items) {
-      totalDamage += item.entry.totalDamage;
-      for (const typed of item.entry.types) {
-        mergedTypesMap.set(typed.type, (mergedTypesMap.get(typed.type) ?? 0) + typed.damage);
-      }
-    }
-
-    return {
-      ...group,
-      totalDamage,
-      types: Array.from(mergedTypesMap.entries()).map(([type, damage]) => ({ type, damage }))
-    };
-  });
-
-  const exact = groups.find((group) => Math.abs(group.totalDamage - targetDamage) <= 0.01);
-  if (exact) return exact;
-  return groups.sort((left, right) => Math.abs(left.totalDamage - targetDamage) - Math.abs(right.totalDamage - targetDamage))[0] ?? null;
-}
-
-function scaleTypedDamage(types, targetTotal) {
-  const currentTotal = types.reduce((sum, entry) => sum + entry.damage, 0);
-  if (currentTotal <= 0 || targetTotal <= 0) return [];
-
-  const roundedTarget = Math.round(targetTotal);
-  let remaining = roundedTarget;
-  const scaled = [];
-
-  for (let index = 0; index < types.length; index += 1) {
-    const entry = types[index];
-    if (index === types.length - 1) {
-      scaled.push({ ...entry, damage: Math.max(remaining, 0) });
-      continue;
-    }
-
-    const amount = Math.max(Math.round((entry.damage / currentTotal) * roundedTarget), 0);
-    scaled.push({ ...entry, damage: amount });
-    remaining -= amount;
-  }
-
-  return scaled.filter((entry) => entry.damage > 0);
-}
-
-function buildPendingTargetKey(actor, token) {
-  return [
-    actor?.uuid ?? "",
-    actor?.id ?? "",
-    token?.document?.uuid ?? token?.uuid ?? "",
-    token?.id ?? ""
-  ].join("|");
-}
-
-function getWorkflowCacheId(workflow) {
-  return String(workflow?.uuid ?? workflow?.id ?? foundry.utils.randomID());
-}
-
-function getTypedDamageSourcePriority(source) {
-  const normalized = String(source ?? "")
-    .replace(/^remote:/, "")
-    .trim();
-
-  if (normalized === "explicit-midi-detail") return 4;
-  if (normalized === "explicit-midi-untyped") return 3;
-  if (normalized === "workflow-item-fallback") return 1;
-  if (normalized === "none") return 0;
-  return 2;
-}
-
-function shouldReplacePendingEntry(existingEntry, nextEntry) {
-  const existingPriority = getTypedDamageSourcePriority(existingEntry?.source);
-  const nextPriority = getTypedDamageSourcePriority(nextEntry?.source);
-  if (nextPriority !== existingPriority) return nextPriority > existingPriority;
-  return (nextEntry?.createdAt ?? 0) >= (existingEntry?.createdAt ?? 0);
-}
-
-function setPendingTypedDamageEntry(storeKey, pendingEntry, context = {}) {
-  const existingEntry = pendingTypedDamageStore.get(storeKey);
-  if (existingEntry && !shouldReplacePendingEntry(existingEntry, pendingEntry)) {
-    debugLog("Skipped lower-priority pending typed damage entry.", {
-      storeKey,
-      workflowId: pendingEntry.workflowId,
-      phase: pendingEntry.phase,
-      existingSource: existingEntry.source,
-      incomingSource: pendingEntry.source,
-      actor: context.actorName,
-      token: context.tokenName
-    });
-    return false;
-  }
-
-  pendingTypedDamageStore.set(storeKey, pendingEntry);
-
-  if (existingEntry && existingEntry.source !== pendingEntry.source) {
-    debugLog("Upgraded pending typed damage entry source.", {
-      storeKey,
-      workflowId: pendingEntry.workflowId,
-      phase: pendingEntry.phase,
-      previousSource: existingEntry.source,
-      nextSource: pendingEntry.source,
-      actor: context.actorName,
-      token: context.tokenName,
-      storeSize: pendingTypedDamageStore.size
-    });
-  }
-
-  return true;
-}
-
-function cleanupExpiredPendingTypedDamage() {
-  const now = Date.now();
-  for (const [storeKey, entry] of pendingTypedDamageStore.entries()) {
-    if (entry.expiresAt < now) {
-      pendingTypedDamageStore.delete(storeKey);
-      debugLog("Expired pending typed damage entry.", {
-        storeKey,
-        workflowId: entry.workflowId,
-        actorId: entry.actorId,
-        actorUuid: entry.actorUuid,
-        tokenId: entry.tokenId,
-        tokenUuid: entry.tokenUuid,
-        phase: entry.phase,
-        ageMs: now - entry.createdAt,
-        source: entry.source,
-        remainingStoreSize: pendingTypedDamageStore.size
-      });
-    }
-  }
-}
-
-function detectHpDelta(actor, change) {
-  for (const path of getConfiguredHpPaths()) {
-    const previousHp = Number(foundry.utils.getProperty(actor, path));
-    if (!foundry.utils.hasProperty(change, path)) continue;
-    const nextHp = Number(foundry.utils.getProperty(change, path));
-    if (!Number.isFinite(previousHp) || !Number.isFinite(nextHp) || nextHp === previousHp) continue;
-
-    return {
-      path,
-      previousHp,
-      nextHp,
-      amount: Math.abs(nextHp - previousHp),
-      kind: nextHp > previousHp ? "heal" : "damage"
-    };
-  }
-
-  return null;
-}
-
-function detectTempHpDelta(actor, change) {
-  for (const path of getConfiguredTempHpPaths()) {
-    const previousValue = Number(foundry.utils.getProperty(actor, path) ?? 0);
-    if (!foundry.utils.hasProperty(change, path)) continue;
-    const nextValue = Number(foundry.utils.getProperty(change, path) ?? 0);
-    if (!Number.isFinite(previousValue) || !Number.isFinite(nextValue) || nextValue === previousValue) continue;
-
-    return {
-      path,
-      previousValue,
-      nextValue,
-      amount: Math.abs(nextValue - previousValue),
-      kind: nextValue > previousValue ? "gain" : "loss"
-    };
-  }
-
-  return null;
-}
-
-function getConfiguredHpPaths() {
-  return game.settings.get(MODULE_ID, "hpPaths")
-    .split(",")
-    .map((path) => path.trim())
-    .filter(Boolean);
-}
-
-function getConfiguredTempHpPaths() {
-  return game.settings.get(MODULE_ID, "tempHpPaths")
-    .split(",")
-    .map((path) => path.trim())
-    .filter(Boolean);
 }
 
 function findTargetTokens(actor, options = {}) {
-  const exactTokenMatches = [];
-  const seen = new Set();
-
-  const addToken = (token) => {
-    if (!token?.id || seen.has(token.id)) return;
-    seen.add(token.id);
-    exactTokenMatches.push(token);
+  const tokens = new Map();
+  const add = (token) => {
+    if (token?.id && token.document) tokens.set(token.id, token);
   };
 
-  const actorParent = actor?.parent;
-  if (actorParent?.documentName === "Token") {
-    addToken(actorParent.object ?? canvas?.tokens?.get(actorParent.id) ?? null);
-  }
-
-  const actorToken = actor?.token;
-  if (actorToken?.documentName === "Token") {
-    addToken(actorToken.object ?? canvas?.tokens?.get(actorToken.id) ?? null);
-  } else if (actorToken?.id) {
-    addToken(canvas?.tokens?.get(actorToken.id) ?? null);
-  }
-
+  if (actor?.isToken) add(actor.token?.object);
   const optionTokenId = options?.tokenId ?? options?.token?.id ?? null;
-  if (optionTokenId) {
-    addToken(canvas?.tokens?.get(optionTokenId) ?? null);
-  }
-
+  if (optionTokenId) add(canvas?.tokens?.get(optionTokenId));
   const optionTokenUuid = options?.tokenUuid ?? options?.token?.uuid ?? options?.token?.document?.uuid ?? null;
   if (optionTokenUuid) {
-    addToken(
-      canvas?.tokens?.placeables?.find((token) =>
-        token?.document?.uuid === optionTokenUuid || token?.uuid === optionTokenUuid
-      ) ?? null
-    );
+    const token = canvas?.tokens?.get(tokenIdFromUuid(optionTokenUuid));
+    if (token?.document?.uuid === optionTokenUuid) add(token);
   }
+  if (tokens.size) return Array.from(tokens.values());
 
-  if (exactTokenMatches.length) {
-    debugLog("Resolved exact token targets for actor update.", {
-      actor: actor?.name,
-      tokenIds: exactTokenMatches.map((token) => token.id),
-      tokenNames: exactTokenMatches.map((token) => token.name)
-    });
-    return exactTokenMatches;
-  }
-
-  const actorMatches = (canvas?.tokens?.placeables ?? []).filter((token) => token.actor?.id === actor.id);
-  debugLog("Falling back to actor-wide token lookup for actor update.", {
-    actor: actor?.name,
-    actorId: actor?.id,
-    tokenIds: actorMatches.map((token) => token.id),
-    tokenNames: actorMatches.map((token) => token.name)
-  });
-  return actorMatches;
+  // Linked actor: every token for it on this scene.
+  for (const token of actor?.getActiveTokens?.(false, false) ?? []) add(token);
+  return Array.from(tokens.values());
 }
+
+/* ------------------------------------------------------------------ */
+/* Sockets                                                            */
+/* ------------------------------------------------------------------ */
 
 function ensureSocketRegistration(source) {
   if (socketReady && splatSocket) return true;
-
   try {
-    const socketApi = globalThis.socketlib ?? globalThis.window?.socketlib ?? null;
-    if (!socketApi?.registerModule) {
-      throw new Error(`socketlib API is unavailable during ${source}.`);
-    }
-
+    const socketApi = globalThis.socketlib ?? null;
+    if (!socketApi?.registerModule) throw new Error(`socketlib API is unavailable during ${source}.`);
     splatSocket = socketApi.registerModule(MODULE_ID);
-    if (!splatSocket?.register) {
-      throw new Error(`socketlib.registerModule did not return a valid socket during ${source}.`);
-    }
-
-    splatSocket.register("renderRemoteSplats", renderRemoteSplats);
-    splatSocket.register("renderRemoteSplatsAsGM", renderRemoteSplatsAsGM);
+    if (!splatSocket?.register) throw new Error(`socketlib.registerModule did not return a valid socket during ${source}.`);
+    splatSocket.register("renderSplats", renderSplats);
+    splatSocket.register("processChangeReport", processChangeReportFromSocket);
     splatSocket.register("cacheRemoteTypedDamage", cacheRemoteTypedDamage);
     socketReady = true;
-    debugLog("Registered remote splat socket.", {
-      source,
-      socketReady,
-      hasSocket: Boolean(splatSocket)
-    });
+    debugLog("Registered splat socket.", { source });
     return true;
   } catch (error) {
     socketReady = false;
@@ -1546,289 +389,121 @@ function ensureSocketRegistration(source) {
   }
 }
 
-function broadcastSplatEvents(tokens, entries, metadata = {}) {
-  if (!entries?.length || !tokens?.length) return;
-
-  const payloads = tokens.map((token) => ({
-    tokenId: token.id,
-    tokenUuid: token.document?.uuid ?? token.uuid ?? null,
-    entries: entries.map((entry) => ({
-      damage: Number(entry.damage) || 0,
-      damageType: normalizeDamageType(entry.damageType ?? "untyped"),
-      kind: entry.kind ?? "damage"
-    }))
-  }));
-
-  debugLog("Built splat payloads for broadcast.", {
-    actor: metadata.actorName,
-    payloads
-  });
-
-  if (game.user?.isGM && socketReady && splatSocket) {
-    debugLog("Broadcasting splat payloads to all clients.", {
-      actor: metadata.actorName,
-      payloadCount: payloads.length,
-      socketReady,
-      hasSocket: Boolean(splatSocket)
-    });
-    void splatSocket.executeForEveryone("renderRemoteSplats", payloads);
-    return;
-  }
-
-  if (socketReady && splatSocket) {
-    debugLog("Sending splat payload request to GM.", {
-      actor: metadata.actorName,
-      payloadCount: payloads.length
-    });
-    void splatSocket.executeAsGM("renderRemoteSplatsAsGM", payloads).catch((error) => {
-      console.warn(`${MODULE_ID} | Could not send splat payload to GM. Falling back to local render.`, error);
-      void renderRemoteSplats(payloads);
-    });
-    return;
-  }
-
-  debugLog("socketlib unavailable. Rendering splats locally only.", {
-    actor: metadata.actorName,
-    payloadCount: payloads.length,
-    socketReady,
-    hasSocket: Boolean(splatSocket),
-    socketlibActive: game.modules.get("socketlib")?.active,
-    socketlibHookFired
-  });
-  void renderRemoteSplats(payloads);
-}
-
-async function renderRemoteSplats(payloads) {
-  debugLog("Received remote splat payloads.", {
-    payloadCount: Array.isArray(payloads) ? payloads.length : 0
-  });
-
-  if (!Array.isArray(payloads)) return;
-
-  for (const payload of payloads) {
-    const token = resolveRemoteToken(payload);
-    if (!token) {
-      debugLog("Could not resolve token for remote splat payload.", payload);
-      continue;
-    }
-
-    await showSplatEntries(token, payload.entries);
-  }
-}
-
-async function renderRemoteSplatsAsGM(payloads) {
+function processChangeReportFromSocket(report) {
   if (!game.user?.isGM) return;
-  if (!socketReady || !splatSocket) {
-    return renderRemoteSplats(payloads);
-  }
-
-  debugLog("GM received splat payload request and is rebroadcasting.", {
-    payloadCount: Array.isArray(payloads) ? payloads.length : 0
-  });
-  await splatSocket.executeForEveryone("renderRemoteSplats", payloads);
+  processChangeReport(report);
 }
 
-function forwardTypedDamageEntriesToGM(workflow, damageEntries) {
-  const payloads = buildRemoteTypedDamagePayloads(workflow, damageEntries);
-  if (!payloads.length) {
-    debugLog("No player-side typed damage payloads were available to forward to the GM.", {
-      workflowId: getWorkflowCacheId(workflow)
+function broadcastSplats(payload) {
+  if (!payload?.entries?.length) return;
+  if (socketReady && splatSocket) {
+    void splatSocket.executeForEveryone("renderSplats", payload).catch((error) => {
+      console.warn(`${MODULE_ID} | Could not broadcast splats. Rendering locally.`, error);
+      void renderSplats(payload);
     });
     return;
   }
+  void renderSplats(payload);
+}
 
-  debugLog("Forwarding typed damage payloads to GM.", {
-    workflowId: getWorkflowCacheId(workflow),
-    payloadCount: payloads.length,
-    sources: Array.from(new Set(payloads.map((payload) => payload.source)))
-  });
-
-  if (!socketReady || !splatSocket) {
-    debugLog("socketlib unavailable. Could not forward typed damage payloads to GM.", {
-      workflowId: getWorkflowCacheId(workflow),
-      payloadCount: payloads.length,
-      socketReady,
-      hasSocket: Boolean(splatSocket)
-    });
+async function renderSplats(payload) {
+  if (!payload || !Array.isArray(payload.entries)) return;
+  const tokens = resolvePayloadTokens(payload);
+  if (!tokens.length) {
+    debugLog("No token on this scene for splat payload.", payload);
     return;
   }
-
-  void splatSocket.executeAsGM("cacheRemoteTypedDamage", payloads).catch((error) => {
-    console.warn(`${MODULE_ID} | Could not forward typed damage payloads to the GM.`, error);
-  });
+  // Every token of the actor is noted before any animation starts, and the animations run together,
+  // so a second token's splat is not held back until the first has finished.
+  for (const token of tokens) nativeTextGate.noteSplat(token.id);
+  await Promise.all(tokens.filter(canUserSeeSplatToken).map(token => showSplatEntries(token, payload.entries)));
 }
 
-function buildRemoteTypedDamagePayloads(workflow, damageEntries) {
-  const workflowId = getWorkflowCacheId(workflow);
-
-  return damageEntries
-    .filter((entry) => entry?.actor && Array.isArray(entry.types) && entry.types.length)
-    .map((entry) => ({
-      workflowId,
-      actorId: entry.actor?.id ?? null,
-      actorUuid: entry.actor?.uuid ?? null,
-      actorName: entry.actor?.name ?? null,
-      tokenId: entry.token?.id ?? null,
-      tokenUuid: entry.token?.document?.uuid ?? entry.token?.uuid ?? null,
-      tokenName: entry.token?.name ?? null,
-      targetKey: buildPendingTargetKey(entry.actor, entry.token),
-      source: entry.source?.startsWith("remote:") ? entry.source : `remote:${entry.source}`,
-      totalDamage: entry.types.reduce((sum, typed) => sum + (Number(typed.damage) || 0), 0),
-      phases: (Array.isArray(entry.phases) ? entry.phases : entry.types.map((typed) => ({
-        phase: "damage",
-        type: typed.type,
-        damage: typed.damage
-      })))
-        .map((phaseEntry) => ({
-          phase: String(phaseEntry.phase ?? "damage"),
-          type: normalizeDamageType(phaseEntry.type),
-          damage: Number(phaseEntry.damage) || 0
-        }))
-        .filter((phaseEntry) => phaseEntry.damage > 0),
-      types: entry.types
-        .map((typed) => ({
-          type: normalizeDamageType(typed.type),
-          damage: Number(typed.damage) || 0
-        }))
-        .filter((typed) => typed.damage > 0)
-    }))
-    .filter((payload) => payload.phases.length && payload.types.length);
-}
-
-function cacheRemoteTypedDamage(payloads) {
-  if (!game.user?.isGM || !Array.isArray(payloads)) return;
-
-  debugLog("GM received remote typed damage payloads.", {
-    payloadCount: payloads.length,
-    sources: Array.from(new Set(payloads.map((payload) => payload?.source).filter(Boolean)))
-  });
-
-  for (const payload of payloads) {
-    storePendingTypedDamagePayload(payload);
+function resolvePayloadTokens(payload) {
+  if (!canvas?.tokens) return [];
+  const tokens = new Map();
+  for (const uuid of payload.tokenUuids ?? []) {
+    const token = canvas.tokens.get(tokenIdFromUuid(uuid));
+    if (token && token.document?.uuid === uuid) tokens.set(token.id, token);
   }
+  if (!tokens.size && payload.actorUuid) {
+    const actor = fromUuidSync(payload.actorUuid);
+    for (const token of actor?.getActiveTokens?.(false, false) ?? []) tokens.set(token.id, token);
+  }
+  return Array.from(tokens.values());
 }
 
-function storePendingTypedDamagePayload(payload) {
-  const actorId = payload?.actorId ?? null;
-  const actorUuid = payload?.actorUuid ?? null;
-  const tokenId = payload?.tokenId ?? null;
-  const tokenUuid = payload?.tokenUuid ?? null;
-  const workflowId = String(payload?.workflowId ?? foundry.utils.randomID());
-  const targetKey = String(payload?.targetKey ?? [actorUuid ?? "", actorId ?? "", tokenUuid ?? "", tokenId ?? ""].join("|"));
-  const phases = Array.isArray(payload?.phases) ? payload.phases : [];
-  const source = String(payload?.source ?? "remote:unknown");
-  const actorName = payload?.actorName ?? game.actors?.get(actorId)?.name ?? null;
-  const tokenName =
-    payload?.tokenName ??
-    canvas?.tokens?.get(tokenId)?.name ??
-    canvas?.tokens?.placeables?.find((placeable) => placeable?.document?.uuid === tokenUuid || placeable?.uuid === tokenUuid)?.name ??
-    null;
-
-  if (!phases.length || !(actorId || actorUuid)) return;
-
-  cleanupExpiredPendingTypedDamage();
-  const createdAt = Date.now();
-
-  for (const [index, phaseEntry] of phases.entries()) {
-    const normalizedType = normalizeDamageType(phaseEntry.type);
-    const totalDamage = Number(phaseEntry.damage) || 0;
-    if (totalDamage <= 0) continue;
-
-    const storeKey = `${workflowId}::${targetKey}::${phaseEntry.phase}::${normalizedType}::${index}`;
-    const pendingEntry = {
-      workflowId,
-      actorId,
-      actorUuid,
-      tokenId,
-      tokenUuid,
-      targetKey,
-      phase: String(phaseEntry.phase ?? "damage"),
-      createdAt,
-      expiresAt: createdAt + PENDING_TYPED_DAMAGE_TTL_MS,
-      totalDamage,
-      source,
-      types: [{
-        type: normalizedType,
-        damage: totalDamage
-      }]
-    };
-
-    const stored = setPendingTypedDamageEntry(storeKey, pendingEntry, { actorName, tokenName });
-    if (!stored) continue;
-
-    debugLog("Stored remote typed damage entry on GM.", {
-      storeKey,
-      actor: actorName,
-      token: tokenName,
-      workflowId,
-      phase: pendingEntry.phase,
-      source,
-      totalDamage: pendingEntry.totalDamage,
-      storeSize: pendingTypedDamageStore.size
-    });
-  }
+function canUserSeeSplatToken(token) {
+  if (!token) return false;
+  if (game.user?.isGM) return true;
+  if (typeof token.isVisible === "boolean") return token.isVisible;
+  return token.visible !== false && token.renderable !== false;
 }
 
-function resolveRemoteToken(payload) {
-  if (!canvas?.tokens) return null;
-  if (payload?.tokenId) {
-    const byId = canvas.tokens.get(payload.tokenId);
-    if (byId) return byId;
-  }
-
-  if (payload?.tokenUuid) {
-    return canvas.tokens.placeables.find((token) =>
-      token.document?.uuid === payload.tokenUuid || token.uuid === payload.tokenUuid
-    ) ?? null;
-  }
-
-  return null;
-}
+/* ------------------------------------------------------------------ */
+/* Rendering                                                          */
+/* ------------------------------------------------------------------ */
 
 async function showSplatEntries(token, entries, styleOverrides = null) {
-  if (!canvas?.tokens || !entries.length) return;
+  if (!canvas?.tokens || !entries?.length) return;
+  const styles = styleOverrides ?? getStoredDamageTypeStyles();
+  const visible = entries
+    .map((entry) => ({ entry, visual: getSplatVisual(entry.damageType, styles) }))
+    .filter(({ visual }) => visual.enabled);
+  if (!visible.length) return;
 
   try {
-    const multiCount = entries.length;
-    const prepared = await Promise.all(
-      entries.map((entry) => prepareSplatData(token, entry, { multiCount, styleOverrides }))
-    );
+    const prepared = (await Promise.all(
+      visible.map(({ entry, visual }) => prepareSplatData(token, entry, visual, visible.length))
+    )).filter(Boolean);
+    if (!prepared.length) return;
 
-    playSplatSound(prepared.find((splat) => String(splat?.style?.sound ?? "").trim())?.style);
-
-    const offsets = computeSplatOffsets(prepared);
-    const renderPromises = prepared.map((splat, index) => renderPreparedSplat(token, splat, offsets[index]));
-    await Promise.allSettled(renderPromises);
+    playSplatSound(prepared.find((splat) => splat.visual.sound)?.visual.sound);
+    const offsets = computeSplatOffsets(prepared, {
+      spread: setting("multiSplatSpread"),
+      gap: setting("multiSplatGap"),
+      arc: setting("multiSplatArc")
+    });
+    await Promise.allSettled(prepared.map((splat, index) => renderPreparedSplat(token, splat, offsets[index])));
   } catch (error) {
     console.error(`${MODULE_ID} | Failed to display splats.`, error);
   }
 }
 
-async function prepareSplatData(token, entry, options = {}) {
-  const dimensions = getTokenDimensions(token);
-  const multiCount = options.multiCount ?? 1;
-  const sizeMultiplier = multiCount > 1 ? 0.75 : 1;
-  const style = getDamageTypeStyle(entry.damageType, options.styleOverrides);
-  const texturePath = style.image || getFallbackSplatPath(entry);
-  const texture = await foundry.canvas.loadTexture(texturePath);
-  const baseTargetSize = Math.max(dimensions.size * 0.48 * dimensions.finalScale, 48);
-  const targetSize = baseTargetSize * sizeMultiplier;
-  const textureWidth = Math.max(texture?.width ?? 1, 1);
-  const textureHeight = Math.max(texture?.height ?? 1, 1);
-  const sourceSize = Math.max(textureWidth, textureHeight, 1);
-  const scale = targetSize / sourceSize;
-  const renderedWidth = textureWidth * scale;
-  const renderedHeight = textureHeight * scale;
-  const fontSize = Math.max(Math.round(dimensions.size * 0.16 * dimensions.finalScale * sizeMultiplier), 18);
+async function loadSplatTexture(path) {
+  if (!path) return null;
+  try {
+    const texture = await foundry.canvas.loadTexture(path);
+    if (texture && texture.valid !== false) return texture;
+  } catch (_error) {
+    // Reported below.
+  }
+  if (!missingTextureWarnings.has(path)) {
+    missingTextureWarnings.add(path);
+    console.warn(`${MODULE_ID} | Could not load splat image "${path}". Using the default splat instead.`);
+  }
+  return null;
+}
 
+async function prepareSplatData(token, entry, visual, multiCount = 1) {
+  const texture = (await loadSplatTexture(visual.image))
+    ?? (visual.fallbackImage !== visual.image ? await loadSplatTexture(visual.fallbackImage) : null);
+  if (!texture) return null;
+
+  const dimensions = getTokenDimensions(token);
+  const sizeMultiplier = multiCount > 1 ? 0.75 : 1;
+  const targetSize = Math.max(dimensions.size * 0.48 * dimensions.finalScale, 48) * sizeMultiplier;
+  const textureWidth = Math.max(texture.width ?? 1, 1);
+  const textureHeight = Math.max(texture.height ?? 1, 1);
+  const scale = targetSize / Math.max(textureWidth, textureHeight, 1);
   return {
     entry,
-    style,
+    visual,
     texture,
     scale,
-    renderedWidth,
-    renderedHeight,
-    fontSize
+    renderedWidth: textureWidth * scale,
+    renderedHeight: textureHeight * scale,
+    fontSize: Math.max(Math.round(dimensions.size * 0.16 * dimensions.finalScale * sizeMultiplier), 18)
   };
 }
 
@@ -1838,89 +513,21 @@ function getTokenDimensions(token) {
   const textureScaleX = Number(token.document.texture?.scaleX ?? 1);
   const textureScaleY = Number(token.document.texture?.scaleY ?? 1);
   const actorScale = Math.max(Math.abs(textureScaleX), Math.abs(textureScaleY), 0.1);
-  const splatScale = Math.max(Number(game.settings.get(MODULE_ID, "splatScale")) || 0.5, 0.05);
-
-  return {
-    width,
-    height,
-    size: Math.max(width, height),
-    finalScale: actorScale * splatScale
-  };
-}
-
-function getFallbackSplatPath(entry) {
-  if (entry.kind === "heal") return game.settings.get(MODULE_ID, "healSplatPath");
-  if (entry.kind === "temp-hp") return game.settings.get(MODULE_ID, "tempHpSplatPath");
-  return game.settings.get(MODULE_ID, "regularSplatPath");
-}
-
-function getTintBaseSplatPath(type) {
-  const normalizedType = normalizeDamageType(type);
-  if (normalizedType === "heal" || normalizedType === "temp-hp") return DEFAULT_HEAL_TINT_SPLAT;
-  return DEFAULT_TINT_SPLAT;
-}
-
-function getDamageTypeStyle(damageType, styleOverrides = null) {
-  const styleMap = styleOverrides ?? getStoredDamageTypeStyles();
-  const type = normalizeDamageType(damageType ?? "untyped");
-  const existing = styleMap[type] ?? {
-    label: TYPE_LABELS[type] ?? toTitleCase(type),
-    enabled: true,
-    image: "",
-    tint: "",
-    text: ""
-  };
-
-  const style = sanitizeStyleRecord(existing, existing.label);
-  if (!style.enabled) {
-    return { image: "", tint: null, textColor: null };
-  }
-
-  const tintColor = parseHexColor(style.tint);
-  const usesTintBase = tintColor !== null;
-
-  return {
-    image: usesTintBase ? getTintBaseSplatPath(type) : style.image,
-    sound: style.soundEnabled
-      ? (style.sound || game.settings.get(MODULE_ID, "defaultSplatSoundPath"))
-      : "",
-    soundEnabled: style.soundEnabled,
-    tint: tintColor,
-    textColor: parseHexColor(style.text)
-  };
-}
-
-function computeSplatOffsets(preparedSplats) {
-  if (preparedSplats.length <= 1) return [{ x: 0, y: 0 }];
-
-  const spreadSetting = Math.max(Number(game.settings.get(MODULE_ID, "multiSplatSpread")) || 0, 0);
-  const gap = Math.max(Number(game.settings.get(MODULE_ID, "multiSplatGap")) || 0, 0);
-  const arcLiftMultiplier = Math.max(Number(game.settings.get(MODULE_ID, "multiSplatArc")) || 0, 0);
-  const averageWidth = preparedSplats.reduce((sum, splat) => sum + splat.renderedWidth, 0) / preparedSplats.length;
-  const compactFactor = 0.28 + spreadSetting;
-  const step = Math.max((averageWidth * compactFactor) + gap, 4);
-  const centerIndex = (preparedSplats.length - 1) / 2;
-
-  return preparedSplats.map((splat, index) => {
-    const x = (index - centerIndex) * step;
-    const centerDistance = Math.abs(index - centerIndex);
-    const y = -(splat.renderedHeight * arcLiftMultiplier * centerDistance);
-    return { x, y };
-  });
+  const splatScale = Math.max(Number(setting("splatScale")) || 0.5, 0.05);
+  return { width, height, size: Math.max(width, height), finalScale: actorScale * splatScale };
 }
 
 async function renderPreparedSplat(token, splat, offset) {
   const container = new PIXI.Container();
   const sprite = new PIXI.Sprite(splat.texture);
-  const text = createDamageText(splat.entry.damage, splat.fontSize, splat.style);
+  const text = createDamageText(splat.entry.damage, splat.fontSize, splat.visual);
 
   sprite.anchor.set(0.5);
   sprite.scale.set(splat.scale);
-  if (splat.style.tint !== null) sprite.tint = splat.style.tint;
+  if (splat.visual.tint !== null) sprite.tint = splat.visual.tint;
   text.anchor.set(0.5);
 
-  container.addChild(sprite);
-  container.addChild(text);
+  container.addChild(sprite, text);
   container.position.set(token.center.x + offset.x, token.center.y + offset.y);
   container.alpha = 0;
   container.scale.set(0.6);
@@ -1928,17 +535,19 @@ async function renderPreparedSplat(token, splat, offset) {
   container.eventMode = "none";
 
   canvas.tokens.addChild(container);
-  await animateSplat(container);
-  container.destroy({ children: true });
+  try {
+    await animateSplat(container);
+  } finally {
+    // The layer may have been torn down by a scene change mid-animation.
+    if (!container.destroyed) container.destroy({ children: true });
+  }
 }
 
-function createDamageText(value, fontSize, style) {
-  const fontFamily = game.settings.get(MODULE_ID, "fontFamily");
-
+function createDamageText(value, fontSize, visual) {
   return new PIXI.Text(String(value), {
-    fontFamily,
+    fontFamily: setting("fontFamily"),
     fontSize,
-    fill: style.textColor ?? 0xfff7bd,
+    fill: visual.textColor ?? 0xfff7bd,
     stroke: 0x000000,
     strokeThickness: Math.max(Math.round(fontSize * 0.12), 4),
     align: "center",
@@ -1951,7 +560,7 @@ function createDamageText(value, fontSize, style) {
 
 async function animateSplat(container) {
   const CanvasAnimation = foundry.canvas.animation.CanvasAnimation;
-  const totalDuration = Math.max(Number(game.settings.get(MODULE_ID, "durationMs")) || 2000, 150);
+  const totalDuration = Math.max(Number(setting("durationMs")) || 2000, 150);
   const introDuration = Math.min(120, Math.round(totalDuration * 0.15));
   const settleDuration = Math.min(90, Math.round(totalDuration * 0.1));
   const outroDuration = Math.max(Math.round(totalDuration * 0.3), 180);
@@ -1965,7 +574,7 @@ async function animateSplat(container) {
     ],
     { duration: introDuration }
   );
-
+  if (container.destroyed) return;
   await CanvasAnimation.animate(
     [
       { parent: container.scale, attribute: "x", from: 1.05, to: 1 },
@@ -1973,9 +582,8 @@ async function animateSplat(container) {
     ],
     { duration: settleDuration }
   );
-
   if (holdDuration > 0) await wait(holdDuration);
-
+  if (container.destroyed) return;
   await CanvasAnimation.animate(
     [
       { parent: container, attribute: "alpha", from: 1, to: 0 },
@@ -1985,146 +593,678 @@ async function animateSplat(container) {
   );
 }
 
-function loadRuneScapeFont() {
-  const fontPath = game.settings.get(MODULE_ID, "fontPath");
-  const fontFamily = game.settings.get(MODULE_ID, "fontFamily");
-  if (!fontPath || !fontFamily || !document?.fonts) return;
+/* ------------------------------------------------------------------ */
+/* Font                                                               */
+/* ------------------------------------------------------------------ */
 
-  const fontFace = new FontFace(fontFamily, `url("${fontPath}")`);
-  fontFace
-    .load()
-    .then((loadedFace) => document.fonts.add(loadedFace))
-    .then(() => debugLog("Font loaded.", { fontPath, fontFamily }))
-    .catch((error) => {
-      console.warn(`${MODULE_ID} | Could not load font at ${fontPath}`, error);
-    });
-}
-
-function patchNativeScrollingText() {
-  const scrollingTextLayer = canvas?.interface;
-  if (!scrollingTextLayer || scrollingTextLayer._rsDamageSplatsPatched) return;
-
-  const originalCreateScrollingText = scrollingTextLayer.createScrollingText;
-  if (typeof originalCreateScrollingText !== "function") return;
-
-  scrollingTextLayer.createScrollingText = function wrappedCreateScrollingText(...args) {
-    const [origin, content] = args;
-    debugLog("canvas.interface.createScrollingText called.", {
-      originType: origin?.constructor?.name,
-      content
-    });
-
-    if (shouldSuppressNativeScrollingText(origin, content)) {
-      debugLog("Suppressed native scrolling text.", { content });
-      return null;
-    }
-
-    return originalCreateScrollingText.apply(this, args);
-  };
-
-  scrollingTextLayer._rsDamageSplatsPatched = true;
-}
-
-function patchTokenScrollingText() {
-  const tokenPrototype = CONFIG?.Token?.objectClass?.prototype;
-  if (!tokenPrototype || tokenPrototype._rsDamageSplatsPatched) return;
-
-  const originalShowScrollingText = tokenPrototype.showScrollingText;
-  if (typeof originalShowScrollingText !== "function") return;
-
-  tokenPrototype.showScrollingText = function wrappedShowScrollingText(...args) {
-    const [content] = args;
-    if (shouldSuppressNativeScrollingText(this, content)) return null;
-    return originalShowScrollingText.apply(this, args);
-  };
-
-  tokenPrototype._rsDamageSplatsPatched = true;
-}
-
-function shouldSuppressNativeScrollingText(origin, content) {
-  if (!game.settings.get(MODULE_ID, "hideNativeScrollingText")) return false;
-
-  const normalizedContent = normalizeScrollingTextContent(content);
-  if (!normalizedContent) return false;
-  if (!/^[+-]?\d+$/.test(normalizedContent)) return false;
-
-  debugLog("Matched native scrolling text for suppression.", {
-    originType: origin?.constructor?.name,
-    rawContent: content,
-    normalizedContent
-  });
-
-  return true;
-}
-
-function normalizeScrollingTextContent(content) {
-  if (content === null || content === undefined) return "";
-
-  return String(content)
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/[−–—]/g, "-")
-    .replace(/[＋]/g, "+")
-    .trim();
-}
-
-function parseHexColor(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const normalized = value.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
-  return Number.parseInt(normalized, 16);
-}
-
-function playSplatSound(style) {
-  if (!game.settings.get(MODULE_ID, "enableSplatSounds")) return;
-  const src = String(style?.sound ?? "").trim();
-  if (!src) return;
-
-  const audioHelper = foundry?.audio?.AudioHelper ?? globalThis.AudioHelper;
-  if (!audioHelper?.play) {
-    console.warn(`${MODULE_ID} | Audio helper is not available for splat sound playback.`);
-    return;
-  }
-
+function registerFontDefinition() {
+  // Lists the font in Foundry's font pickers. Damage numbers load it directly below.
   try {
-    const result = audioHelper.play({
-      src,
-      volume: 0.8,
-      autoplay: true,
-      loop: false
-    }, false);
-
-    if (result && typeof result.catch === "function") {
-      result.catch((error) => {
-        console.warn(`${MODULE_ID} | Could not play splat sound at ${src}`, error);
-      });
+    const family = setting("fontFamily");
+    const path = setting("fontPath");
+    if (family && path && CONFIG.fontDefinitions && !CONFIG.fontDefinitions[family]) {
+      CONFIG.fontDefinitions[family] = { editor: true, fonts: [{ urls: [path] }] };
     }
   } catch (error) {
-    console.warn(`${MODULE_ID} | Could not play splat sound at ${src}`, error);
+    debugLog("Could not register the splat font with Foundry.", { error });
   }
 }
 
-function normalizeDamageType(value) {
-  return String(value ?? "untyped")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "-");
+function loadRuneScapeFont() {
+  const fontPath = setting("fontPath");
+  const fontFamily = setting("fontFamily");
+  if (!fontPath || !fontFamily || !document?.fonts) return;
+  new FontFace(fontFamily, cssUrl(fontPath))
+    .load()
+    .then((face) => document.fonts.add(face))
+    .then(() => debugLog("Font loaded.", { fontPath, fontFamily }))
+    .catch((error) => console.warn(`${MODULE_ID} | Could not load font at ${fontPath}`, error));
 }
 
-function toTitleCase(value) {
-  return String(value ?? "")
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+/* ------------------------------------------------------------------ */
+/* Native floating numbers                                            */
+/* ------------------------------------------------------------------ */
+
+function patchNativeScrollingText() {
+  const proto = foundry.canvas?.groups?.InterfaceCanvasGroup?.prototype
+    ?? (canvas?.interface ? Object.getPrototypeOf(canvas.interface) : null);
+  if (!proto || proto._rsDamageSplatsPatched || typeof proto.createScrollingText !== "function") return;
+  const original = proto.createScrollingText;
+  proto.createScrollingText = function wrappedCreateScrollingText(...args) {
+    const [origin, content] = args;
+    if (!setting("hideNativeScrollingText") || !isNumericScrollingText(content)) return original.apply(this, args);
+    const token = tokenAtOrigin(origin);
+    if (!token) return original.apply(this, args);
+    const verdict = nativeTextGate.offer(token.id, () => original.apply(this, args));
+    debugLog("Native floating number gated.", { token: token.name, content, verdict });
+    return verdict === "pass" ? original.apply(this, args) : null;
+  };
+  proto._rsDamageSplatsPatched = true;
 }
+
+function tokenAtOrigin(origin) {
+  if (!origin || !canvas?.tokens) return null;
+  if (origin.document?.documentName === "Token") return origin;
+  const x = Number(origin.x);
+  const y = Number(origin.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return canvas.tokens.placeables.find((token) =>
+    Math.abs(token.center.x - x) < 2 && Math.abs(token.center.y - y) < 2
+  ) ?? null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sound                                                              */
+/* ------------------------------------------------------------------ */
+
+function playSound(src, label) {
+  const path = String(src ?? "").trim();
+  if (!path) return false;
+  const audioHelper = foundry.audio?.AudioHelper ?? globalThis.AudioHelper;
+  if (!audioHelper?.play) {
+    console.warn(`${MODULE_ID} | Audio helper is not available for ${label} playback.`);
+    return false;
+  }
+  try {
+    const result = audioHelper.play({ src: path, volume: 0.8, autoplay: true, loop: false }, false);
+    result?.catch?.((error) => console.warn(`${MODULE_ID} | Could not play ${label} at ${path}`, error));
+    return true;
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not play ${label} at ${path}`, error);
+    return false;
+  }
+}
+
+function playSplatSound(src) {
+  if (!setting("enableSplatSounds")) return;
+  playSound(src, "splat sound");
+}
+
+/* ------------------------------------------------------------------ */
+/* Midi-QOL typed damage                                              */
+/* ------------------------------------------------------------------ */
+
+function registerMidiQolHooks() {
+  if (!game.modules.get("midi-qol")?.active) {
+    debugLog("Midi-QOL is not active. Typed damage splats are disabled.");
+    return;
+  }
+  Hooks.on("midi-qol.DamageRollComplete", (workflow) => {
+    if (!setting("useMidiQolTypedDamage")) return;
+    cacheMidiQolWorkflow(workflow);
+  });
+  debugLog("Registered Midi-QOL typed damage hook on midi-qol.DamageRollComplete.");
+}
+
+/** The typed cache lives on the active GM, who turns HP changes into splats. */
+function typedCacheOwner() {
+  const gm = game.users?.activeGM;
+  if (!gm || gm.isSelf) return null;
+  return gm;
+}
+
+function cacheMidiQolWorkflow(workflow) {
+  try {
+    const damageEntries = extractMidiDamageEntries(workflow);
+    if (!damageEntries.length) {
+      debugLog("Midi-QOL workflow had no typed damage entries.", { workflow });
+      return;
+    }
+    const owner = typedCacheOwner();
+    if (owner) {
+      forwardTypedDamageEntries(owner, workflow, damageEntries);
+      return;
+    }
+    for (const entry of damageEntries) {
+      if (!entry.actor || !entry.types.length) continue;
+      storePendingTypedDamage(entry.actor, entry.token, workflow, entry.types, entry.source, entry.phases);
+    }
+  } catch (error) {
+    console.error(`${MODULE_ID} | Failed to process Midi-QOL typed damage.`, error);
+  }
+}
+
+function extractMidiDamageEntries(workflow) {
+  const rawDamageList = Array.isArray(workflow?.damageList)
+    ? workflow.damageList
+    : Array.isArray(workflow?.damageData)
+      ? workflow.damageData
+      : [];
+
+  const targetEntries = [];
+  for (const item of rawDamageList) {
+    const entry = buildMidiDamageEntry(item, workflow) ?? buildFallbackMidiDamageEntry(item, workflow);
+    if (entry) targetEntries.push(entry);
+  }
+  if (targetEntries.length) return targetEntries;
+
+  const workflowWideTypes = collectTypedDamageFromMidiWorkflow(workflow);
+  if (!workflowWideTypes.length) return [];
+  return findWorkflowTargets(workflow)
+    .map((token) => ({
+      actor: token.actor,
+      token,
+      source: "workflow-item-fallback",
+      phases: workflowWideTypes.map((entry) => ({ phase: "save-burst", type: entry.type, damage: entry.damage })),
+      types: workflowWideTypes
+    }))
+    .filter((entry) => entry.actor && entry.types.length);
+}
+
+function buildMidiDamageEntry(item, workflow) {
+  const token = findTokenFromMidiItem(item);
+  const actor = token?.actor ?? findActorFromMidiItem(item);
+  if (!actor) return null;
+  const resolved = resolveTypedDamageForTarget(item, workflow, token, actor);
+  const typedDamage = resolved.types.filter((entry) => entry.damage > 0);
+  if (!typedDamage.length) return null;
+  return { actor, token, phases: resolved.phases, source: resolved.source, types: typedDamage };
+}
+
+function buildFallbackMidiDamageEntry(item, workflow) {
+  const token = findTokenFromMidiItem(item);
+  const actor = token?.actor ?? findActorFromMidiItem(item);
+  if (!actor) return null;
+
+  const phaseEntries = inferTypedPhaseEntriesForTarget(item, workflow, token, actor);
+  const phasedTypes = mergePhaseEntriesByType(phaseEntries);
+  if (phasedTypes.length) {
+    return { actor, token, phases: phaseEntries, source: "workflow-item-fallback", types: phasedTypes };
+  }
+
+  const targetTotalDamage = resolveMidiItemAppliedDamage(item, workflow);
+  if (targetTotalDamage <= 0) return null;
+  const workflowWideTypes = collectTypedDamageFromMidiWorkflow(workflow);
+  if (!workflowWideTypes.length) return null;
+  const scaledTypes = scaleTypedDamage(workflowWideTypes, targetTotalDamage)
+    .map((entry) => ({ type: normalizeDamageType(entry.type), damage: Number(entry.damage) || 0 }))
+    .filter((entry) => entry.damage > 0);
+  if (!scaledTypes.length) return null;
+  return {
+    actor,
+    token,
+    phases: deriveWorkflowPhases(workflow, token, actor, scaledTypes),
+    source: "workflow-item-fallback",
+    types: scaledTypes
+  };
+}
+
+function findTokenFromMidiItem(item) {
+  if (!canvas?.tokens) return null;
+  const tokenId = item?.tokenId ?? tokenIdFromUuid(item?.tokenUuid) ?? tokenIdFromUuid(item?.actorUuid);
+  if (tokenId) {
+    const token = canvas.tokens.get(tokenId);
+    if (token) return token;
+  }
+  // Only a linked actor maps safely to "its" token; unlinked tokens share a base actor id.
+  const actorId = item?.actorId ?? String(item?.actorUuid ?? "").split(".").at(-1);
+  if (!actorId) return null;
+  return canvas.tokens.placeables.find((token) => token.document.actorLink && token.document.actorId === actorId) ?? null;
+}
+
+function findActorFromMidiItem(item) {
+  if (item?.actorUuid) {
+    const actor = fromUuidSync(item.actorUuid);
+    if (actor) return actor;
+  }
+  return item?.actorId ? game.actors?.get(item.actorId) ?? null : null;
+}
+
+function resolveTypedDamageForTarget(item, workflow, token, actor) {
+  const explicit = collectExplicitTypedDamage(item, workflow);
+  const explicitConcrete = explicit.filter((entry) => entry.type !== "untyped");
+
+  // A per-target Midi damage detail already includes saves, resistances,
+  // immunities, and mixed damage. It is more trustworthy than item inference.
+  if (explicitConcrete.length) {
+    return {
+      source: "explicit-midi-detail",
+      phases: deriveWorkflowPhases(workflow, token, actor, explicitConcrete),
+      types: explicitConcrete
+    };
+  }
+
+  const derivedPhases = inferTypedPhaseEntriesForTarget(item, workflow, token, actor);
+  const derivedConcrete = mergePhaseEntriesByType(derivedPhases).filter((entry) => entry.type !== "untyped");
+  if (derivedConcrete.length) {
+    return { source: "workflow-item-fallback", phases: derivedPhases, types: derivedConcrete };
+  }
+
+  if (explicit.length) {
+    return { source: "explicit-midi-untyped", phases: deriveWorkflowPhases(workflow, token, actor, explicit), types: explicit };
+  }
+  return { source: "none", phases: [], types: [] };
+}
+
+function collectExplicitTypedDamage(item, workflow) {
+  const itemSpecific = [
+    item?.damageDetail,
+    item?.damageDetails,
+    item?.damageDetailApplied,
+    item?.appliedDamageDetail,
+    item?.calcDamageOptions?.damageDetail,
+    item?.calcDamageOptions?.damageDetails
+  ];
+  const workflowWide = [
+    workflow?.damageDetail,
+    workflow?.damageDetails,
+    workflow?.damageItem?.damageDetail,
+    workflow?.damageItem?.damageDetails
+  ];
+  const hasItemSpecific = itemSpecific.some((candidate) => flattenDamageCandidates(candidate).length > 0);
+  return aggregateTypedDamage(hasItemSpecific ? itemSpecific : workflowWide);
+}
+
+function collectTypedDamageFromMidiWorkflow(workflow) {
+  const aggregated = aggregateTypedDamage([
+    workflow?.damageDetail,
+    workflow?.damageDetails,
+    workflow?.damageItem?.damageDetail,
+    workflow?.damageItem?.damageDetails,
+    workflow?.workflowOptions?.damageDetail,
+    workflow?.workflowOptions?.damageDetails
+  ]);
+  if (aggregated.length) return aggregated;
+
+  const types = collectWorkflowItemDamageTypes(workflow);
+  if (!types.length) return [];
+  const totalDamage = resolveWorkflowTotalDamage(workflow);
+  if (totalDamage <= 0) return [];
+  if (types.length === 1) return [{ type: types[0], damage: totalDamage }];
+  return splitDamageAcrossTypes(types, totalDamage);
+}
+
+function activityKind(workflow) {
+  const name = workflow?.activity?.constructor?.name ?? "";
+  return { isAttack: /Attack/i.test(name), isSave: /Save/i.test(name) };
+}
+
+function inferTypedPhaseEntriesForTarget(item, workflow, token, actor) {
+  const targetInfo = getWorkflowTargetInfo(workflow, token, actor);
+  const { isAttack, isSave } = activityKind(workflow);
+  const types = selectTargetDamageTypes(collectWorkflowItemDamageTypes(workflow), { isAttack, ...targetInfo });
+  if (!types.length) return [];
+
+  const isMixedAttackSave = isAttack && types.length > 1 && (targetInfo.isAnySaveTarget || hasWorkflowSaveTargets(workflow));
+  const rollTotals = resolveWorkflowDamageRollTotals(workflow);
+
+  if (isMixedAttackSave && rollTotals.length >= 2) {
+    const phases = [];
+    const primaryDamage = rollTotals[0];
+    const secondaryDamage = rollTotals.slice(1).reduce((sum, value) => sum + value, 0);
+    if (targetInfo.isHitTarget && primaryDamage > 0) {
+      phases.push({ phase: "attack-hit", type: types[0], damage: primaryDamage });
+    }
+    if (targetInfo.isAnySaveTarget && secondaryDamage > 0) {
+      for (const entry of splitDamageAcrossTypes(types.slice(1), secondaryDamage)) {
+        phases.push({ phase: "save-burst", type: entry.type, damage: entry.damage });
+      }
+    }
+    if (phases.length) return phases;
+  }
+
+  const totalDamage = resolveMidiItemAppliedDamage(item, workflow);
+  if (totalDamage <= 0) return [];
+
+  if (isSave) {
+    return splitDamageAcrossTypes(types, totalDamage).map((entry, index) => ({
+      phase: index === 0 ? "save-burst" : `save-burst-${index}`,
+      type: entry.type,
+      damage: entry.damage
+    }));
+  }
+  if (types.length === 1) {
+    return [{ phase: isAttack ? "attack-hit" : "damage", type: types[0], damage: totalDamage }];
+  }
+  return splitDamageAcrossTypes(types, totalDamage).map((entry, index) => ({
+    phase: index === 0 && isAttack ? "attack-hit" : "save-burst",
+    type: entry.type,
+    damage: entry.damage
+  }));
+}
+
+function collectWorkflowItemDamageTypes(workflow) {
+  // Damage parts only: an activity's own `type` ("attack", "save") is not a damage type.
+  const activityParts = workflow?.activity
+    ? [workflow.activity.damage?.parts]
+    : Array.from(workflow?.item?.system?.activities?.values?.() ?? []).map((activity) => activity?.damage?.parts);
+  const partsCandidates = [
+    workflow?.item?.system?.damage?.parts,
+    workflow?.item?.system?.damage?.value,
+    workflow?.item?.system?.formula?.parts,
+    workflow?.activity?.damage?.value,
+    ...activityParts
+  ];
+  const types = [];
+  for (const candidate of partsCandidates) {
+    for (const type of flattenDamagePartTypes(candidate)) if (type) types.push(type);
+  }
+  return Array.from(new Set(types));
+}
+
+function flattenDamagePartTypes(candidate, depth = 0) {
+  if (!candidate || typeof candidate !== "object" || depth > 4) return [];
+  if (Array.isArray(candidate)) {
+    // Legacy dnd5e part: ["1d8 + @mod", "slashing"].
+    if (candidate.length === 2 && typeof candidate[0] === "string" && typeof candidate[1] === "string") {
+      return candidate[1].trim() ? [normalizeDamageType(candidate[1])] : [];
+    }
+    return candidate.flatMap((part) => flattenDamagePartTypes(part, depth + 1));
+  }
+  // dnd5e 4.x damage parts list their types as a Set (an array in source data).
+  const typeList = candidate.types instanceof Set ? Array.from(candidate.types) : candidate.types;
+  if (Array.isArray(typeList)) {
+    return typeList.filter((type) => typeof type === "string" && type.trim()).map((type) => normalizeDamageType(type));
+  }
+  const directType = candidate.type ?? candidate.damageType ?? "";
+  if (typeof directType === "string" && directType.trim()) return [normalizeDamageType(directType)];
+  return [];
+}
+
+function deriveWorkflowPhases(workflow, token, actor, typedEntries) {
+  const targetInfo = getWorkflowTargetInfo(workflow, token, actor);
+  const { isAttack, isSave } = activityKind(workflow);
+  if (isSave) return typedEntries.map((entry) => ({ phase: "save-burst", type: entry.type, damage: entry.damage }));
+  if (!isAttack) return typedEntries.map((entry) => ({ phase: "damage", type: entry.type, damage: entry.damage }));
+  if (typedEntries.length === 1) {
+    return [{
+      phase: targetInfo.isFailedSaveTarget ? "save-burst" : "attack-hit",
+      type: typedEntries[0].type,
+      damage: typedEntries[0].damage
+    }];
+  }
+  return typedEntries.map((entry, index) => ({
+    phase: index === 0 && targetInfo.isHitTarget ? "attack-hit" : "save-burst",
+    type: entry.type,
+    damage: entry.damage
+  }));
+}
+
+function getWorkflowTargetInfo(workflow, token, actor) {
+  const tokenId = token?.id ?? null;
+  const actorUuid = actor?.uuid ?? token?.actor?.uuid ?? null;
+  // Match by token where we know it; unlinked tokens share their base actor id.
+  const matches = (collection) =>
+    normalizeTargetCollection(collection).some((candidate) =>
+      tokenId ? candidate?.id === tokenId : Boolean(actorUuid) && candidate?.actor?.uuid === actorUuid
+    );
+  return {
+    isHitTarget: matches(workflow?.hitTargets),
+    isFailedSaveTarget: matches(workflow?.failedSaves),
+    isTarget: matches(workflow?.targets),
+    isAnySaveTarget:
+      matches(workflow?.failedSaves) ||
+      matches(workflow?.saves) ||
+      matches(workflow?.superSavers) ||
+      matches(workflow?.semiSuperSavers)
+  };
+}
+
+function hasWorkflowSaveTargets(workflow) {
+  return [workflow?.failedSaves, workflow?.saves, workflow?.superSavers, workflow?.semiSuperSavers]
+    .some((collection) => normalizeTargetCollection(collection).length > 0);
+}
+
+function resolveWorkflowTotalDamage(workflow) {
+  for (const candidate of [workflow?.damageTotal, workflow?.damageItem?.hpDamage, workflow?.damageItem?.appliedDamage, workflow?.damageRoll?.total]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return Math.round(numeric);
+  }
+  const sum = resolveWorkflowDamageRollTotals(workflow).reduce((acc, value) => acc + value, 0);
+  return sum > 0 ? sum : 0;
+}
+
+function resolveWorkflowDamageRollTotals(workflow) {
+  const totals = [];
+  for (const roll of Array.isArray(workflow?.damageRolls) ? workflow.damageRolls : []) {
+    const numeric = Number(roll?.total);
+    if (Number.isFinite(numeric) && numeric > 0) totals.push(Math.round(numeric));
+  }
+  if (!totals.length) {
+    const single = Number(workflow?.damageRoll?.total);
+    if (Number.isFinite(single) && single > 0) totals.push(Math.round(single));
+  }
+  return totals;
+}
+
+function resolveMidiItemAppliedDamage(item, workflow) {
+  const candidates = [
+    item?.appliedDamage,
+    item?.hpDamage,
+    item?.totalDamage,
+    item?.damage,
+    item?.appliedTotal,
+    item?.newHP !== undefined && item?.oldHP !== undefined ? Number(item.oldHP) - Number(item.newHP) : undefined
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return Math.round(numeric);
+  }
+  return resolveWorkflowTotalDamage(workflow);
+}
+
+function findWorkflowTargets(workflow) {
+  const tokens = new Map();
+  const candidates = [
+    workflow?.hitTargets,
+    workflow?.targets,
+    workflow?.failedSaves,
+    workflow?.saves,
+    workflow?.superSavers,
+    workflow?.semiSuperSavers,
+    workflow?.applicationTargets,
+    workflow?.damageList?.map?.((entry) => entry?.tokenUuid ?? entry?.tokenId),
+    workflow?.damageData?.map?.((entry) => entry?.tokenUuid ?? entry?.tokenId)
+  ];
+  for (const candidate of candidates) {
+    for (const token of normalizeTargetCollection(candidate)) if (token?.id) tokens.set(token.id, token);
+  }
+  return Array.from(tokens.values());
+}
+
+function normalizeTargetCollection(candidate) {
+  if (!candidate) return [];
+  if (candidate instanceof Set) return Array.from(candidate).flatMap((entry) => normalizeTargetCollection(entry));
+  if (Array.isArray(candidate)) return candidate.flatMap((entry) => normalizeTargetCollection(entry));
+  if (typeof candidate === "string") {
+    const token = canvas?.tokens?.get(tokenIdFromUuid(candidate) ?? candidate);
+    return token ? [token] : [];
+  }
+  if (candidate.object?.documentName === "Token") return [candidate.object];
+  if (candidate.document?.documentName === "Token") return [candidate];
+  if (candidate.documentName === "Token") return candidate.object ? [candidate.object] : [];
+  if (candidate.token?.documentName === "Token") return candidate.token.object ? [candidate.token.object] : [];
+  if (candidate.id && canvas?.tokens?.get(candidate.id)) return [canvas.tokens.get(candidate.id)];
+  return [];
+}
+
+/* ------------------------------------------------------------------ */
+/* Pending typed damage cache                                         */
+/* ------------------------------------------------------------------ */
+
+function buildPendingTargetKey(actorUuid, actorId, tokenUuid, tokenId) {
+  return [actorUuid ?? "", actorId ?? "", tokenUuid ?? "", tokenId ?? ""].join("|");
+}
+
+function getWorkflowCacheId(workflow) {
+  return String(workflow?.uuid ?? workflow?.id ?? foundry.utils.randomID());
+}
+
+function storePendingTypedDamage(actor, token, workflow, types, source = "unknown", phases = null) {
+  if (!actor?.uuid || !Array.isArray(types) || !types.length) return;
+  storePendingTypedDamagePayload({
+    workflowId: getWorkflowCacheId(workflow),
+    actorId: actor.id,
+    actorUuid: actor.uuid,
+    actorName: actor.name,
+    tokenId: token?.id ?? null,
+    tokenUuid: token?.document?.uuid ?? null,
+    tokenName: token?.name ?? null,
+    source,
+    phases: Array.isArray(phases) && phases.length
+      ? phases
+      : types.map((entry) => ({ phase: "damage", type: entry.type, damage: entry.damage }))
+  });
+}
+
+function forwardTypedDamageEntries(owner, workflow, damageEntries) {
+  const workflowId = getWorkflowCacheId(workflow);
+  const payloads = damageEntries
+    .filter((entry) => entry?.actor && Array.isArray(entry.types) && entry.types.length)
+    .map((entry) => ({
+      workflowId,
+      actorId: entry.actor.id ?? null,
+      actorUuid: entry.actor.uuid ?? null,
+      actorName: entry.actor.name ?? null,
+      tokenId: entry.token?.id ?? null,
+      tokenUuid: entry.token?.document?.uuid ?? null,
+      tokenName: entry.token?.name ?? null,
+      source: String(entry.source ?? "unknown").startsWith("remote:") ? entry.source : `remote:${entry.source}`,
+      phases: (Array.isArray(entry.phases) && entry.phases.length
+        ? entry.phases
+        : entry.types.map((typed) => ({ phase: "damage", type: typed.type, damage: typed.damage })))
+        .map((phase) => ({ phase: String(phase.phase ?? "damage"), type: normalizeDamageType(phase.type), damage: Number(phase.damage) || 0 }))
+        .filter((phase) => phase.damage > 0)
+    }))
+    .filter((payload) => payload.phases.length);
+  if (!payloads.length) return;
+  if (!socketReady || !splatSocket) {
+    debugLog("socketlib unavailable. Could not forward typed damage to the GM.", { workflowId });
+    return;
+  }
+  void splatSocket.executeAsUser("cacheRemoteTypedDamage", owner.id, payloads).catch((error) => {
+    console.warn(`${MODULE_ID} | Could not forward typed damage payloads to the GM.`, error);
+  });
+}
+
+function cacheRemoteTypedDamage(payloads) {
+  if (!game.user?.isGM || !Array.isArray(payloads)) return;
+  for (const payload of payloads) storePendingTypedDamagePayload(payload);
+}
+
+function storePendingTypedDamagePayload(payload) {
+  const actorId = payload?.actorId ?? null;
+  const actorUuid = payload?.actorUuid ?? null;
+  const tokenId = payload?.tokenId ?? null;
+  const tokenUuid = payload?.tokenUuid ?? null;
+  const phases = Array.isArray(payload?.phases) ? payload.phases : [];
+  if (!phases.length || !(actorId || actorUuid)) return;
+
+  cleanupExpiredPendingTypedDamage();
+  const workflowId = String(payload?.workflowId ?? foundry.utils.randomID());
+  const targetKey = buildPendingTargetKey(actorUuid, actorId, tokenUuid, tokenId);
+  const source = String(payload?.source ?? "unknown");
+  const createdAt = Date.now();
+
+  for (const [index, phaseEntry] of phases.entries()) {
+    const type = normalizeDamageType(phaseEntry.type);
+    const totalDamage = Number(phaseEntry.damage) || 0;
+    if (totalDamage <= 0) continue;
+    const storeKey = `${workflowId}::${targetKey}::${phaseEntry.phase}::${type}::${index}`;
+    const pendingEntry = {
+      workflowId,
+      actorId,
+      actorUuid,
+      tokenId,
+      tokenUuid,
+      phase: String(phaseEntry.phase ?? "damage"),
+      createdAt,
+      expiresAt: createdAt + PENDING_TYPED_DAMAGE_TTL_MS,
+      totalDamage,
+      source,
+      types: [{ type, damage: totalDamage }]
+    };
+    const existing = pendingTypedDamageStore.get(storeKey);
+    if (existing && !shouldReplacePendingEntry(existing, pendingEntry)) continue;
+    pendingTypedDamageStore.set(storeKey, pendingEntry);
+    trimPendingTypedDamageStore();
+    debugLog("Stored pending typed damage entry.", {
+      actor: payload?.actorName,
+      token: payload?.tokenName,
+      workflowId,
+      phase: pendingEntry.phase,
+      source,
+      totalDamage
+    });
+  }
+}
+
+function consumePendingTypedDamage(actorRef, tokenRefs, appliedDamage, workflowIds = new Set(), consumeOptions = {}) {
+  cleanupExpiredPendingTypedDamage();
+  const numericAppliedDamage = Number(appliedDamage) || 0;
+  const useCachedDamage = numericAppliedDamage <= 0 && consumeOptions.allowCachedDamage === true;
+  if (numericAppliedDamage <= 0 && !useCachedDamage) return null;
+  if (!pendingTypedDamageStore.size) return null;
+
+  const tokenIds = new Set(tokenRefs.map((ref) => ref.id).filter(Boolean));
+  const tokenUuids = new Set(tokenRefs.map((ref) => ref.uuid).filter(Boolean));
+  const now = Date.now();
+
+  const candidates = Array.from(pendingTypedDamageStore.entries())
+    .map(([storeKey, entry]) => ({ storeKey, entry }))
+    .filter(({ entry }) => {
+      const actorMatch = entry.actorUuid && actorRef.uuid
+        ? entry.actorUuid === actorRef.uuid
+        : Boolean(actorRef.id) && entry.actorId === actorRef.id;
+      const tokenMatch = !tokenIds.size || !entry.tokenId || tokenIds.has(entry.tokenId) || tokenUuids.has(entry.tokenUuid);
+      if (!actorMatch || !tokenMatch) return false;
+      if (useCachedDamage) {
+        return workflowIds.has(String(entry.workflowId)) || now - entry.createdAt <= CLAMPED_UPDATE_MAX_AGE_MS;
+      }
+      return true;
+    });
+  if (!candidates.length) {
+    debugLog("No matching typed damage for HP change.", { actor: actorRef.name, appliedDamage: numericAppliedDamage });
+    return null;
+  }
+
+  const group = findBestPendingCandidateGroup(candidates, useCachedDamage ? null : numericAppliedDamage, workflowIds);
+  if (!group) return null;
+  for (const item of group.items) pendingTypedDamageStore.delete(item.storeKey);
+  if (group.totalDamage <= 0) return null;
+
+  debugLog("Matched typed damage for HP change.", {
+    actor: actorRef.name,
+    workflowId: group.workflowId,
+    source: group.source,
+    appliedDamage: numericAppliedDamage,
+    cachedTotal: group.totalDamage,
+    types: group.types
+  });
+
+  if (useCachedDamage || Math.abs(group.totalDamage - numericAppliedDamage) <= 0.01) {
+    return { totalDamage: group.totalDamage, types: group.types };
+  }
+  return { totalDamage: numericAppliedDamage, types: scaleTypedDamage(group.types, numericAppliedDamage) };
+}
+
+function trimPendingTypedDamageStore() {
+  const overflow = pendingTypedDamageStore.size - MAX_PENDING_TYPED_DAMAGE_ENTRIES;
+  if (overflow <= 0) return;
+  const oldestKeys = Array.from(pendingTypedDamageStore.entries())
+    .sort((left, right) => (left[1]?.createdAt ?? 0) - (right[1]?.createdAt ?? 0))
+    .slice(0, overflow)
+    .map(([storeKey]) => storeKey);
+  for (const storeKey of oldestKeys) pendingTypedDamageStore.delete(storeKey);
+}
+
+function cleanupExpiredPendingTypedDamage() {
+  const now = Date.now();
+  for (const [storeKey, entry] of pendingTypedDamageStore.entries()) {
+    if (entry.expiresAt < now) pendingTypedDamageStore.delete(storeKey);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilities                                                          */
+/* ------------------------------------------------------------------ */
 
 function wait(duration) {
   return new Promise((resolve) => setTimeout(resolve, duration));
 }
 
 function debugLog(message, data = {}) {
-  if (!game.settings.get(MODULE_ID, "debug")) return;
+  if (!game.settings?.settings?.has?.(`${MODULE_ID}.debug`) || !setting("debug")) return;
   console.log(`${MODULE_ID} | ${message}`, data);
 }
 
@@ -2135,93 +1275,66 @@ function findPreviewToken() {
     ?? null;
 }
 
-function getPreviewKindForType(type) {
-  const normalizedType = normalizeDamageType(type);
-  if (normalizedType === "heal") return "heal";
-  if (normalizedType === "temp-hp") return "temp-hp";
-  return "damage";
-}
-
-function toCssHexColor(value, fallback = "#FFF7BD") {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return `#${value.toString(16).padStart(6, "0").slice(-6)}`;
-  }
-
-  if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value.trim())) {
-    return value.trim();
-  }
-
-  return fallback;
-}
-
-function playPreviewSoundPath(soundPath) {
-  const src = String(soundPath ?? "").trim();
-  if (!src) return false;
-
-  const audioHelper = foundry?.audio?.AudioHelper ?? globalThis.AudioHelper;
-  if (!audioHelper?.play) {
-    console.warn(`${MODULE_ID} | Audio helper is not available for preview sound playback.`);
-    return false;
-  }
-
-  try {
-    const result = audioHelper.play({
-      src,
-      volume: 0.8,
-      autoplay: true,
-      loop: false
-    }, false);
-
-    if (result && typeof result.catch === "function") {
-      result.catch((error) => {
-        console.warn(`${MODULE_ID} | Could not play preview sound at ${src}`, error);
-      });
-    }
-
-    return true;
-  } catch (error) {
-    console.warn(`${MODULE_ID} | Could not play preview sound at ${src}`, error);
-    return false;
-  }
-}
-
 const previewImageCache = new Map();
 
 function loadPreviewImage(path) {
   const normalizedPath = String(path ?? "").trim();
   if (!normalizedPath) return Promise.resolve(null);
-
   if (previewImageCache.has(normalizedPath)) return previewImageCache.get(normalizedPath);
-
   const promise = new Promise((resolve) => {
     const image = new Image();
     image.onload = () => resolve(image);
     image.onerror = () => resolve(null);
     image.src = normalizedPath;
   });
-
   previewImageCache.set(normalizedPath, promise);
   return promise;
 }
 
-class DamageTypeStylesConfig extends FormApplication {
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: `${MODULE_ID}-damage-type-styles`,
-      title: "Fluxee's Damage Splats: Damage Type Styles",
-      template: `modules/${MODULE_ID}/templates/damage-type-styles-config.html`,
-      width: 1040,
-      height: 900,
-      resizable: true,
-      classes: ["rsds-config-window"],
-      closeOnSubmit: false,
-      submitOnChange: false
-    });
-  }
+/* ------------------------------------------------------------------ */
+/* Damage Type Styles manager                                         */
+/* ------------------------------------------------------------------ */
 
-  getData() {
+const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+
+class DamageTypeStylesConfig extends HandlebarsApplicationMixin(ApplicationV2) {
+  static DEFAULT_OPTIONS = {
+    id: `${MODULE_ID}-damage-type-styles`,
+    tag: "form",
+    classes: ["rsds-config-window"],
+    window: {
+      title: "Fluxee's Damage Splats: Damage Type Styles",
+      icon: "fas fa-burst",
+      resizable: true
+    },
+    position: { width: 1040, height: 900 },
+    form: {
+      handler: DamageTypeStylesConfig.#onSubmit,
+      closeOnSubmit: true,
+      submitOnChange: false
+    },
+    actions: {
+      apply: DamageTypeStylesConfig.#onApply,
+      "reset-all": DamageTypeStylesConfig.#onResetAll,
+      preview: DamageTypeStylesConfig.#onPreview,
+      "test-sound": DamageTypeStylesConfig.#onTestSound,
+      reset: DamageTypeStylesConfig.#onResetRow,
+      "bundled-art": DamageTypeStylesConfig.#onBundledArt,
+      "browse-image": DamageTypeStylesConfig.#onBrowseImage,
+      "browse-sound": DamageTypeStylesConfig.#onBrowseSound
+    }
+  };
+
+  static PARTS = {
+    form: {
+      template: `modules/${MODULE_ID}/templates/damage-type-styles-config.html`,
+      scrollable: [".rsds-manager-list"]
+    }
+  };
+
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
     const styles = getStoredDamageTypeStyles();
-    const defaults = getDefaultDamageTypeStyles();
     const rows = Object.entries(styles)
       .sort(([typeA], [typeB]) => {
         const indexA = TYPE_ORDER.indexOf(typeA);
@@ -2232,17 +1345,7 @@ class DamageTypeStylesConfig extends FormApplication {
         return indexA - indexB;
       })
       .map(([type, style]) => {
-        const effectiveStyle = getDamageTypeStyle(type, styles);
-        const previewAmount = type === "heal" ? 12 : 9;
-        const previewPath = effectiveStyle.image || getFallbackSplatPath({ kind: getPreviewKindForType(type) });
-        const imageModeLabel = effectiveStyle.tint !== null
-          ? `Tint Base`
-          : (style.image ? "Custom Image" : "Fallback Image");
-        const soundPath = style.sound || game.settings.get(MODULE_ID, "defaultSplatSoundPath");
-        const soundModeLabel = style.soundEnabled
-          ? (style.sound ? "Custom Sound" : "Default Sound")
-          : "Sound Off";
-
+        const visual = getSplatVisual(type, styles);
         return {
           type,
           label: style.label,
@@ -2252,214 +1355,156 @@ class DamageTypeStylesConfig extends FormApplication {
           sound: style.sound,
           tint: style.tint,
           text: style.text,
-          defaultImage: defaults[type]?.image ?? "",
-          defaultSoundEnabled: defaults[type]?.soundEnabled !== false,
-          defaultSound: defaults[type]?.sound ?? "",
-          defaultTint: defaults[type]?.tint ?? "",
-          defaultText: defaults[type]?.text ?? "",
-          defaultEnabled: defaults[type]?.enabled !== false,
-          previewAmount,
-          previewPath,
-          imageModeLabel,
-          soundModeLabel,
-          previewTextColor: toCssHexColor(effectiveStyle.textColor, "#FFF7BD"),
-          previewTintColor: toCssHexColor(effectiveStyle.tint, "#FF0000"),
-          soundPath
+          bundledArt: BUNDLED_TYPE_ART[type] ?? "",
+          previewAmount: type === "heal" ? 12 : 9,
+          imageModeLabel: IMAGE_MODE_LABELS[visual.mode] ?? "",
+          soundModeLabel: !style.soundEnabled ? "Sound Off" : style.sound ? "Custom Sound" : "Default Sound",
+          textColor: style.text || DEFAULT_TEXT_COLOR,
+          tintColor: style.tint || DEFAULT_TINT_PICKER_COLOR
         };
       });
-
-    return { rows };
+    return { ...context, rows };
   }
 
-  activateListeners(html) {
-    super.activateListeners(html);
-    this._setupResponsiveLayout();
+  _onFirstRender(context, options) {
+    super._onFirstRender?.(context, options);
+    const sync = (event) => {
+      const row = event.target.closest?.(".rsds-row[data-type]");
+      this._syncColorToggleStates(row ?? this.element);
+      this._syncRowPreviews(row ?? this.element);
+    };
+    this.element.addEventListener("input", sync);
+    this.element.addEventListener("change", sync);
+  }
+
+  _onRender(context, options) {
+    super._onRender?.(context, options);
     this._syncColorToggleStates();
     this._syncRowPreviews();
-    this._closeAfterSave = false;
-
-    html.find("input, select").on("input change", () => {
-      this._syncColorToggleStates();
-      this._syncRowPreviews();
-    });
-
-    html.find("[data-action='browse-image']").on("click", async (event) => {
-      event.preventDefault();
-      await this._browseForPath(event.currentTarget, "image");
-    });
-
-    html.find("[data-action='browse-sound']").on("click", async (event) => {
-      event.preventDefault();
-      await this._browseForPath(event.currentTarget, "audio");
-    });
-
-    html.find("[data-action='apply']").on("click", async (event) => {
-      event.preventDefault();
-      await this._saveStyles({ closeAfterSave: false });
-    });
-
-    html.find("[data-action='save']").on("click", () => {
-      this._closeAfterSave = true;
-    });
-
-    html.find("[data-action='reset-all']").on("click", async (event) => {
-      event.preventDefault();
-      await this._resetAllRowsToDefaults();
-    });
-
-    html.find("[data-action='preview']").on("click", async (event) => {
-      event.preventDefault();
-      const button = event.currentTarget;
-      const type = button.dataset.type;
-      const token = findPreviewToken();
-      if (!token) {
-        ui.notifications?.warn("Select or control a token before testing a splat.");
-        return;
-      }
-
-      const styleOverrides = this._collectStylesFromForm();
-      const amount = Number(button.dataset.amount ?? 9) || 9;
-      const kind = type === "heal" ? "heal" : "damage";
-
-      await showSplatEntries(
-        token,
-        [{ damage: amount, damageType: type, kind }],
-        styleOverrides
-      );
-    });
-
-    html.find("[data-action='test-sound']").on("click", (event) => {
-      event.preventDefault();
-      const button = event.currentTarget;
-      const row = button.closest(".rsds-row[data-type]");
-      if (!row) return;
-      this._testSoundForRow(row);
-    });
-
-    html.find("[data-action='reset']").on("click", (event) => {
-      event.preventDefault();
-      const button = event.currentTarget;
-      const type = button.dataset.type;
-      const row = this.form.querySelector(`.rsds-row[data-type="${type}"]`);
-      if (!row) return;
-      this._resetRowToDefaults(row, type);
-    });
   }
 
-  setPosition(position = {}) {
-    const result = super.setPosition(position);
-    this._syncResponsiveLayoutClass();
-    return result;
+  static async #onSubmit() {
+    await this._saveStyles();
   }
 
-  close(options) {
-    if (this._resizeObserver) {
-      this._resizeObserver.disconnect();
-      this._resizeObserver = null;
+  static async #onApply() {
+    await this._saveStyles();
+  }
+
+  static #onResetAll() {
+    for (const row of this.element.querySelectorAll(".rsds-row[data-type]")) {
+      this._resetRowToDefaults(row, normalizeDamageType(row.dataset.type));
     }
-    return super.close(options);
+    ui.notifications?.info("Damage type rows reset to bundled defaults. Save to keep them.");
   }
 
-  _setupResponsiveLayout() {
-    this._syncResponsiveLayoutClass();
-    if (this._resizeObserver || !this.form || typeof ResizeObserver === "undefined") return;
-
-    const target = this.element?.[0] ?? this.form;
-    if (!target) return;
-
-    this._resizeObserver = new ResizeObserver(() => {
-      this._syncResponsiveLayoutClass();
-    });
-    this._resizeObserver.observe(target);
-  }
-
-  _syncResponsiveLayoutClass() {
-    const app = this.element?.[0];
-    if (!app) return;
-
-    const width = app.clientWidth || this.position?.width || 0;
-    app.classList.toggle("rsds-layout-stacked", width > 0 && width < 980);
-    app.classList.toggle("rsds-layout-compact", width >= 980 && width < 1320);
-  }
-
-  _syncColorToggleStates(scope = this.form) {
-    if (!scope) return;
-
-    for (const row of scope.matches?.(".rsds-row[data-type]") ? [scope] : scope.querySelectorAll(".rsds-row[data-type]")) {
-      const type = normalizeDamageType(row.dataset.type);
-      const pairs = [
-        {
-          toggle: row.querySelector(`[name="styles.${type}.textEnabled"]`),
-          input: row.querySelector(`[name="styles.${type}.text"]`)
-        },
-        {
-          toggle: row.querySelector(`[name="styles.${type}.tintEnabled"]`),
-          input: row.querySelector(`[name="styles.${type}.tint"]`)
-        }
-      ];
-
-      for (const pair of pairs) {
-        if (!pair.toggle || !pair.input) continue;
-        pair.input.disabled = !pair.toggle.checked;
-      }
+  static async #onPreview(_event, button) {
+    const type = normalizeDamageType(button.dataset.type);
+    const token = findPreviewToken();
+    if (!token) {
+      ui.notifications?.warn("Select or control a token before testing a splat.");
+      return;
     }
-  }
-
-  _syncRowPreviews(scope = this.form) {
-    if (!scope) return;
-
     const styleOverrides = this._collectStylesFromForm();
-    for (const row of scope.matches?.(".rsds-row[data-type]") ? [scope] : scope.querySelectorAll(".rsds-row[data-type]")) {
+    if (!getSplatVisual(type, styleOverrides).enabled) {
+      ui.notifications?.warn(`${typeLabel(type)} splats are disabled. Tick Enabled to test this type.`);
+      return;
+    }
+    const amount = Number(button.dataset.amount ?? 9) || 9;
+    await showSplatEntries(token, [{ damage: amount, damageType: type, kind: previewKindForType(type) }], styleOverrides);
+  }
+
+  static #onTestSound(_event, button) {
+    const row = button.closest(".rsds-row[data-type]");
+    if (!row) return;
+    const type = normalizeDamageType(row.dataset.type);
+    if (!row.querySelector(`[name="styles.${type}.soundEnabled"]`)?.checked) {
+      ui.notifications?.warn("Enable sound for this row before testing it.");
+      return;
+    }
+    const customPath = String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim();
+    const soundPath = customPath || setting("defaultSplatSoundPath");
+    if (!soundPath) {
+      ui.notifications?.warn("This row does not have a sound path to test.");
+      return;
+    }
+    playSound(soundPath, "preview sound");
+  }
+
+  static #onResetRow(_event, button) {
+    const type = normalizeDamageType(button.dataset.type);
+    const row = this._row(type);
+    if (row) this._resetRowToDefaults(row, type);
+  }
+
+  static #onBundledArt(_event, button) {
+    const type = normalizeDamageType(button.dataset.type);
+    const row = this._row(type);
+    const art = BUNDLED_TYPE_ART[type];
+    if (!row || !art) return;
+    row.querySelector(`[name="styles.${type}.image"]`).value = art;
+    // Bundled art is already colored; a tint would be drawn on the tint base instead.
+    row.querySelector(`[name="styles.${type}.tintEnabled"]`).checked = false;
+    this._syncColorToggleStates(row);
+    this._syncRowPreviews(row);
+  }
+
+  static async #onBrowseImage(_event, button) {
+    await this._browseForPath(button, "image");
+  }
+
+  static async #onBrowseSound(_event, button) {
+    await this._browseForPath(button, "audio");
+  }
+
+  _row(type) {
+    return this.element.querySelector(`.rsds-row[data-type="${CSS.escape(type)}"]`);
+  }
+
+  _syncColorToggleStates(scope = this.element) {
+    if (!scope) return;
+    const rows = scope.matches?.(".rsds-row[data-type]") ? [scope] : scope.querySelectorAll(".rsds-row[data-type]");
+    for (const row of rows) {
       const type = normalizeDamageType(row.dataset.type);
-      const label = row.dataset.label ?? TYPE_LABELS[type] ?? toTitleCase(type);
-      const style = getDamageTypeStyle(type, styleOverrides);
-      const previewBox = row.querySelector("[data-preview-box]") ?? row.querySelector(".rsds-manager-preview");
-      const previewCanvas = row.querySelector("[data-preview-canvas]");
-      const previewEmpty = row.querySelector("[data-preview-empty]");
+      for (const key of ["text", "tint"]) {
+        const toggle = row.querySelector(`[name="styles.${type}.${key}Enabled"]`);
+        const input = row.querySelector(`[name="styles.${type}.${key}"]`);
+        if (toggle && input) input.disabled = !toggle.checked;
+      }
+    }
+  }
+
+  _syncRowPreviews(scope = this.element) {
+    if (!scope) return;
+    const styleOverrides = this._collectStylesFromForm();
+    const rows = scope.matches?.(".rsds-row[data-type]") ? [scope] : scope.querySelectorAll(".rsds-row[data-type]");
+    for (const row of rows) {
+      const type = normalizeDamageType(row.dataset.type);
+      const visual = getSplatVisual(type, styleOverrides);
+      const previewBox = row.querySelector("[data-preview-box]");
       const previewText = row.querySelector("[data-preview-text]");
       const imageModeBadge = row.querySelector("[data-derived='image-mode']");
       const soundModeBadge = row.querySelector("[data-derived='sound-mode']");
       const soundEnabled = Boolean(row.querySelector(`[name="styles.${type}.soundEnabled"]`)?.checked);
-      const kind = getPreviewKindForType(type);
-      const previewPath = style.image || getFallbackSplatPath({ kind });
-      const isTint = style.tint !== null;
+      const textColor = toCssHexColor(visual.textColor, DEFAULT_TEXT_COLOR);
 
-      row.classList.toggle("rsds-uses-tint-base", isTint);
-
-      if (previewBox) {
-        previewBox.classList.toggle("is-empty", !previewPath);
-        previewBox.style.setProperty("--rsds-preview-text", toCssHexColor(style.textColor, "#FFF7BD"));
-      }
-
-      if (previewEmpty) {
-        previewEmpty.textContent = previewPath ? "" : "No image";
-      }
-
-      if (previewText) {
-        const amount = row.querySelector("[data-action='preview']")?.dataset?.amount ?? (type === "heal" ? "12" : "9");
-        previewText.textContent = amount;
-        previewText.style.color = toCssHexColor(style.textColor, "#FFF7BD");
-      }
-
-      if (imageModeBadge) {
-        imageModeBadge.textContent = isTint
-          ? "Tint Base"
-          : (String(row.querySelector(`[name="styles.${type}.image"]`)?.value ?? "").trim() ? "Custom Image" : "Fallback Image");
-      }
-
+      row.classList.toggle("is-disabled", !visual.enabled);
+      row.classList.toggle("rsds-uses-tint-base", visual.mode === "tint-base");
+      if (previewBox) previewBox.style.setProperty("--rsds-preview-text", textColor);
+      if (previewText) previewText.style.color = textColor;
+      if (imageModeBadge) imageModeBadge.textContent = IMAGE_MODE_LABELS[visual.mode] ?? "";
       if (soundModeBadge) {
-        soundModeBadge.textContent = !soundEnabled
-          ? "Sound Off"
-          : (String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim() ? "Custom Sound" : "Default Sound");
+        const custom = String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim();
+        soundModeBadge.textContent = !soundEnabled ? "Sound Off" : custom ? "Custom Sound" : "Default Sound";
       }
-
-      this._renderPreviewCanvas(previewCanvas, previewPath, style.tint, previewBox);
+      // A disabled type still previews its look, dimmed, so it can be re-enabled knowingly.
+      const look = visual.enabled ? visual : getSplatVisual(type, { ...styleOverrides, [type]: { ...styleOverrides[type], enabled: true } });
+      void this._renderPreviewCanvas(row.querySelector("[data-preview-canvas]"), look.image, look.fallbackImage, look.tint, previewBox);
     }
   }
 
-  async _renderPreviewCanvas(canvasElement, imagePath, tintValue, previewBox) {
+  async _renderPreviewCanvas(canvasElement, imagePath, fallbackPath, tintValue, previewBox) {
     if (!(canvasElement instanceof HTMLCanvasElement)) return;
-
     const context = canvasElement.getContext("2d");
     if (!context) return;
     const requestKey = `${imagePath || ""}|${tintValue ?? ""}`;
@@ -2472,41 +1517,33 @@ class DamageTypeStylesConfig extends FormApplication {
       canvasElement.height = baseSize * dpr;
     }
 
+    const primary = await loadPreviewImage(imagePath);
+    const loadedImage = primary ?? (fallbackPath && fallbackPath !== imagePath ? await loadPreviewImage(fallbackPath) : null);
+    if (canvasElement.dataset.previewRequestKey !== requestKey) return;
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvasElement.width, canvasElement.height);
     context.scale(dpr, dpr);
+    previewBox?.classList.toggle("is-empty", !loadedImage);
+    // The splat would fall back to the default image; flag the bad path.
+    previewBox?.classList.toggle("is-broken", Boolean(imagePath) && !primary);
+    if (previewBox) previewBox.title = imagePath && !primary ? `Can't load ${imagePath}. The default splat is shown instead.` : "";
+    if (!loadedImage) return;
 
-    if (!imagePath) {
-      if (previewBox) previewBox.classList.add("is-empty");
-      return;
-    }
-
-    const loadedImage = await loadPreviewImage(imagePath);
-    if (canvasElement.dataset.previewRequestKey !== requestKey) return;
-    if (!loadedImage) {
-      if (previewBox) previewBox.classList.add("is-empty");
-      return;
-    }
-
-    if (previewBox) previewBox.classList.remove("is-empty");
-
-    const maxWidth = baseSize - 16;
-    const maxHeight = baseSize - 16;
-    const widthScale = maxWidth / Math.max(loadedImage.naturalWidth || loadedImage.width || 1, 1);
-    const heightScale = maxHeight / Math.max(loadedImage.naturalHeight || loadedImage.height || 1, 1);
-    const scale = Math.min(widthScale, heightScale, 1);
-    const drawWidth = Math.max(Math.round((loadedImage.naturalWidth || loadedImage.width || maxWidth) * scale), 1);
-    const drawHeight = Math.max(Math.round((loadedImage.naturalHeight || loadedImage.height || maxHeight) * scale), 1);
+    const maxSize = baseSize - 16;
+    const naturalWidth = loadedImage.naturalWidth || loadedImage.width || maxSize;
+    const naturalHeight = loadedImage.naturalHeight || loadedImage.height || maxSize;
+    const scale = Math.min(maxSize / naturalWidth, maxSize / naturalHeight, 1);
+    const drawWidth = Math.max(Math.round(naturalWidth * scale), 1);
+    const drawHeight = Math.max(Math.round(naturalHeight * scale), 1);
     const drawX = Math.round((baseSize - drawWidth) / 2);
     const drawY = Math.round((baseSize - drawHeight) / 2);
 
     context.imageSmoothingEnabled = true;
     context.drawImage(loadedImage, drawX, drawY, drawWidth, drawHeight);
-
-    if (tintValue !== null) {
-      const tintColor = toCssHexColor(tintValue, "#FF0000");
+    if (tintValue !== null && tintValue !== undefined) {
+      // Same result as PIXI's multiply tint: image color × tint, original alpha.
       context.globalCompositeOperation = "source-atop";
-      context.fillStyle = tintColor;
+      context.fillStyle = toCssHexColor(tintValue, DEFAULT_TINT_PICKER_COLOR);
       context.fillRect(drawX, drawY, drawWidth, drawHeight);
       context.globalCompositeOperation = "multiply";
       context.drawImage(loadedImage, drawX, drawY, drawWidth, drawHeight);
@@ -2518,110 +1555,58 @@ class DamageTypeStylesConfig extends FormApplication {
 
   async _browseForPath(button, fileType) {
     const inputSelector = button?.dataset?.target;
-    if (!inputSelector || !this.form) return;
-
-    const input = this.form.querySelector(inputSelector);
+    const input = inputSelector ? this.element.querySelector(inputSelector) : null;
     if (!input) return;
-
     const current = String(input.value ?? "").trim();
-    const pickerType = fileType === "audio" ? "audio" : "image";
-    const currentDir = current.includes("/") ? current.split("/").slice(0, -1).join("/") : "";
-
-    const picker = new FilePicker({
-      type: pickerType,
-      current: currentDir,
+    const Picker = foundry.applications.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+    const picker = new Picker({
+      type: fileType === "audio" ? "audio" : "image",
+      current: current.includes("/") ? current.split("/").slice(0, -1).join("/") : "",
       callback: (path) => {
         input.value = path;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }
     });
-
-    await picker.render(true);
-  }
-
-  _testSoundForRow(row) {
-    const type = normalizeDamageType(row.dataset.type);
-    const soundEnabled = Boolean(row.querySelector(`[name="styles.${type}.soundEnabled"]`)?.checked);
-    if (!soundEnabled) {
-      ui.notifications?.warn("Enable sound for this row before testing it.");
-      return;
-    }
-
-    const customPath = String(row.querySelector(`[name="styles.${type}.sound"]`)?.value ?? "").trim();
-    const soundPath = customPath || game.settings.get(MODULE_ID, "defaultSplatSoundPath");
-    if (!soundPath) {
-      ui.notifications?.warn("This row does not have a sound path to test.");
-      return;
-    }
-
-    playPreviewSoundPath(soundPath);
+    await picker.render({ force: true });
   }
 
   _resetRowToDefaults(row, type) {
     const defaults = getDefaultDamageTypeStyles()[type];
     if (!defaults) return;
-
-    row.querySelector(`[name="styles.${type}.enabled"]`).checked = defaults.enabled !== false;
-    row.querySelector(`[name="styles.${type}.image"]`).value = defaults.image ?? "";
-    row.querySelector(`[name="styles.${type}.soundEnabled"]`).checked = defaults.soundEnabled !== false;
-    row.querySelector(`[name="styles.${type}.sound"]`).value = defaults.sound ?? "";
-    row.querySelector(`[name="styles.${type}.tintEnabled"]`).checked = Boolean(defaults.tint);
-    row.querySelector(`[name="styles.${type}.textEnabled"]`).checked = Boolean(defaults.text);
-    row.querySelector(`[name="styles.${type}.tint"]`).value = defaults.tint || "#FF0000";
-    row.querySelector(`[name="styles.${type}.text"]`).value = defaults.text || "#FFF7BD";
+    const field = (key) => row.querySelector(`[name="styles.${type}.${key}"]`);
+    field("enabled").checked = defaults.enabled !== false;
+    field("image").value = defaults.image ?? "";
+    field("soundEnabled").checked = defaults.soundEnabled !== false;
+    field("sound").value = defaults.sound ?? "";
+    field("tintEnabled").checked = Boolean(defaults.tint);
+    field("textEnabled").checked = Boolean(defaults.text);
+    field("tint").value = defaults.tint || DEFAULT_TINT_PICKER_COLOR;
+    field("text").value = defaults.text || DEFAULT_TEXT_COLOR;
     this._syncColorToggleStates(row);
     this._syncRowPreviews(row);
   }
 
-  async _resetAllRowsToDefaults() {
-    for (const row of this.form.querySelectorAll(".rsds-row[data-type]")) {
-      this._resetRowToDefaults(row, normalizeDamageType(row.dataset.type));
-    }
-    ui.notifications?.info("Damage type rows reset to bundled defaults.");
-  }
-
   _collectStylesFromForm() {
     const normalized = {};
-
-    for (const row of this.form.querySelectorAll(".rsds-row[data-type]")) {
+    for (const row of this.element.querySelectorAll(".rsds-row[data-type]")) {
       const type = normalizeDamageType(row.dataset.type);
-      const label = row.dataset.label ?? TYPE_LABELS[type] ?? toTitleCase(type);
-      const enabledInput = row.querySelector(`[name="styles.${type}.enabled"]`);
-      const imageInput = row.querySelector(`[name="styles.${type}.image"]`);
-      const soundEnabledInput = row.querySelector(`[name="styles.${type}.soundEnabled"]`);
-      const soundInput = row.querySelector(`[name="styles.${type}.sound"]`);
-      const tintEnabledInput = row.querySelector(`[name="styles.${type}.tintEnabled"]`);
-      const tintInput = row.querySelector(`[name="styles.${type}.tint"]`);
-      const textEnabledInput = row.querySelector(`[name="styles.${type}.textEnabled"]`);
-      const textInput = row.querySelector(`[name="styles.${type}.text"]`);
-
-      normalized[type] = sanitizeStyleRecord(
-        {
-          label,
-          enabled: Boolean(enabledInput?.checked),
-          image: imageInput?.value ?? "",
-          soundEnabled: Boolean(soundEnabledInput?.checked),
-          sound: soundInput?.value ?? "",
-          tint: tintEnabledInput?.checked ? (tintInput?.value ?? "") : "",
-          text: textEnabledInput?.checked ? (textInput?.value ?? "") : ""
-        },
-        label
-      );
+      const label = row.dataset.label || typeLabel(type);
+      const field = (key) => row.querySelector(`[name="styles.${type}.${key}"]`);
+      normalized[type] = sanitizeStyleRecord({
+        label,
+        enabled: Boolean(field("enabled")?.checked),
+        image: field("image")?.value ?? "",
+        soundEnabled: Boolean(field("soundEnabled")?.checked),
+        sound: field("sound")?.value ?? "",
+        tint: field("tintEnabled")?.checked ? (field("tint")?.value ?? "") : "",
+        text: field("textEnabled")?.checked ? (field("text")?.value ?? "") : ""
+      }, label);
     }
-
     return normalized;
   }
 
-  async _updateObject(_event, _formData) {
-    await this._saveStyles({ closeAfterSave: this._closeAfterSave });
-    this._closeAfterSave = false;
-  }
-
-  async _saveStyles({ closeAfterSave = false } = {}) {
-    const normalized = this._collectStylesFromForm();
-    await game.settings.set(MODULE_ID, "damageTypeStyles", JSON.stringify(normalized, null, 2));
+  async _saveStyles() {
+    await game.settings.set(MODULE_ID, "damageTypeStyles", JSON.stringify(this._collectStylesFromForm(), null, 2));
     ui.notifications?.info("Damage type splat settings saved.");
-    if (closeAfterSave) await this.close();
   }
 }

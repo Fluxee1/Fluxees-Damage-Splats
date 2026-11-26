@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>Damage Splats harness</title>
+<link rel="stylesheet" href="/modules/rs-damage-splats/styles/rs-damage-splats.css">
+<style>html, body { margin: 0; height: 100%; background: #333; font-family: sans-serif; }</style>
+<script src="/modules/rs-damage-splats/tests/browser/foundry-stub.js"></script>
+</head>
+<body>
+<script type="module">
+  window.addEventListener("error", (e) => (window.__errors ??= []).push(String(e.error?.stack || e.message)));
+  window.addEventListener("unhandledrejection", (e) => (window.__errors ??= []).push(String(e.reason?.stack || e.reason)));
+  await import("/modules/rs-damage-splats/scripts/rs-damage-splats.js");
+  Hooks.callAll("init");
+  const params = new URLSearchParams(location.search);
+  const Menu = game.settings.menus.get("rs-damage-splats.damageTypeStylesMenu").type;
+  window.app = new Menu({ position: { width: Number(params.get("w") || 1040), height: Number(params.get("h") || 900) } });
+  await window.app.render({ force: true });
+  window.__ready = true;
+</script>
+</body>
+</html>

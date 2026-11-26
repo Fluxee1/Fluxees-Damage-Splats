@@ -10,12 +10,15 @@
   overflow: hidden;
   padding: 0;
   background: #161318;
+  container: rsds / inline-size;
 }
 
 .rsds-manager-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
   color: #efe5d0;
   background:
     radial-gradient(circle at top, rgba(56, 44, 39, 0.35), rgba(19, 16, 20, 0.96)),
@@ -69,7 +72,6 @@
   flex-direction: column;
   gap: 14px;
   padding: 18px;
-  padding-bottom: 104px;
 }
 
 .rsds-manager-row {
@@ -115,6 +117,22 @@
   display: none;
   font-size: 12px;
   color: rgba(239, 229, 208, 0.7);
+}
+
+.rsds-manager-row.is-disabled .rsds-manager-preview {
+  opacity: 0.35;
+  filter: grayscale(0.8);
+}
+
+.rsds-manager-row.is-disabled .rsds-manager-badge:first-child {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(239, 229, 208, 0.6);
+  text-decoration: line-through;
+}
+
+.rsds-manager-preview.is-broken {
+  border-color: rgba(255, 120, 100, 0.7);
+  border-style: solid;
 }
 
 .rsds-manager-preview-text {
@@ -314,39 +332,11 @@
   min-width: 170px;
 }
 
-.rsds-config-window.rsds-layout-compact .rsds-manager-row {
-  grid-template-columns: 96px minmax(0, 1fr);
-  gap: 14px;
-}
-
-.rsds-config-window.rsds-layout-compact .rsds-manager-preview {
-  width: 92px;
-  height: 92px;
-}
-
-.rsds-config-window.rsds-layout-compact .rsds-manager-grid-secondary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-header {
-  flex-direction: column;
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-primary {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-secondary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (max-width: 900px) {
-  .rsds-manager-header {
-    flex-direction: column;
-  }
-
-  .rsds-manager-grid-primary {
-    grid-template-columns: minmax(0, 1fr);
+/* Layout follows the window's own width, not the screen's. */
+@container rsds (max-width: 1300px) {
+  .rsds-manager-row {
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 14px;
   }
 
   .rsds-manager-grid-secondary {
@@ -354,39 +344,29 @@
   }
 }
 
-.rsds-config-window.rsds-layout-stacked .rsds-manager-row {
-  grid-template-columns: 1fr;
+@container rsds (max-width: 960px) {
+  .rsds-manager-header,
+  .rsds-manager-topline,
+  .rsds-manager-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rsds-manager-grid-primary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rsds-manager-row-actions {
+    justify-content: flex-start;
+  }
+
+  .rsds-manager-save,
+  .rsds-manager-save-secondary {
+    width: 100%;
+  }
 }
 
-.rsds-config-window.rsds-layout-stacked .rsds-manager-preview {
-  width: 100%;
-  max-width: 180px;
-  height: 140px;
-  justify-self: center;
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-topline {
-  flex-direction: column;
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-row-actions {
-  justify-content: flex-start;
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-grid-secondary {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-footer {
-  flex-direction: column;
-}
-
-.rsds-config-window.rsds-layout-stacked .rsds-manager-save,
-.rsds-config-window.rsds-layout-stacked .rsds-manager-save-secondary {
-  width: 100%;
-}
-
-@media (max-width: 720px) {
+@container rsds (max-width: 640px) {
   .rsds-manager-row {
     grid-template-columns: 1fr;
   }
@@ -398,24 +378,7 @@
     justify-self: center;
   }
 
-  .rsds-manager-topline {
-    flex-direction: column;
-  }
-
-  .rsds-manager-row-actions {
-    justify-content: flex-start;
-  }
-
   .rsds-manager-grid-secondary {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rsds-manager-footer {
-    flex-direction: column;
-  }
-
-  .rsds-manager-save,
-  .rsds-manager-save-secondary {
-    width: 100%;
   }
 }

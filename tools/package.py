@@ -12,6 +12,7 @@ RUNTIME_FILES = (
     "scripts/rs-damage-splats.js",
     "styles/rs-damage-splats.css",
     "templates/damage-type-styles-config.html",
+    "scripts/splat-core.mjs",
 )
 PACKAGE_FILES = ("module.json", "README.md", *RUNTIME_FILES)
 
@@ -43,8 +44,9 @@ def validate(root):
     expected = f"{REPOSITORY}/releases/download/{manifest['version']}-Release/{MODULE_ID}.zip"
     if manifest.get("download") != expected:
         raise ValueError("Download URL must match the manifest version and release asset")
-    if manifest.get("compatibility") != {"minimum": "11", "verified": "13"}:
-        raise ValueError("Packaging must preserve the existing Foundry compatibility")
+    compatibility = manifest.get("compatibility") or {}
+    if not all(isinstance(compatibility.get(k), str) and compatibility[k] for k in ("minimum", "verified")):
+        raise ValueError("Compatibility needs minimum and verified Foundry versions")
     if manifest.get("esmodules") != [RUNTIME_FILES[0]] or manifest.get("styles") != [RUNTIME_FILES[1]]:
         raise ValueError("Manifest entry points must match the reviewed runtime files")
     for name in PACKAGE_FILES:

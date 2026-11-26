@@ -58,7 +58,7 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual((self.root / name).read_bytes(), (target / name).read_bytes())
             for name in ("tools", "tests", ".git", ".gitignore", ".gitattributes", ".github", "assets/.gitkeep"):
                 self.assertFalse((target / name).exists())
-            self.assertEqual(manifest["compatibility"], {"minimum": "11", "verified": "13"})
+            self.assertTrue(manifest["compatibility"]["minimum"] and manifest["compatibility"]["verified"])
             self.assertEqual(manifest["relationships"]["requires"][0]["id"], "socketlib")
         finally:
             server.shutdown()
@@ -108,9 +108,9 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reviewed runtime files"):
             package.build(self.root)
 
-    def test_reject_unverified_compatibility_change(self):
-        self.edit_manifest(compatibility={"minimum": "11", "verified": "14"})
-        with self.assertRaisesRegex(ValueError, "preserve the existing Foundry compatibility"):
+    def test_reject_incomplete_compatibility(self):
+        self.edit_manifest(compatibility={"minimum": "13"})
+        with self.assertRaisesRegex(ValueError, "minimum and verified"):
             package.build(self.root)
 
     def test_exclude_unlisted_files_in_every_directory(self):

@@ -10,7 +10,7 @@ on:
       release_tag:
         description: Existing published release tag (registration only)
         required: true
-        default: 1.1.1-Release
+        default: 1.2.2-Release
         type: string
       dry_run:
         description: Validate without saving to Foundry
@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -v
           node --check scripts/rs-damage-splats.js
+          node --test tests/*.test.mjs
       - name: Build validated installable assets
         run: python tools/package.py
       - uses: actions/upload-artifact@v4
