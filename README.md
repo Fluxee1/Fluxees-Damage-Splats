@@ -2,7 +2,7 @@
 
 RuneScape-style damage splats for Foundry VTT with support for healing, temp HP, typed damage, custom images, custom sounds, tint colors, and text colors.
 
-[Join the Discord!](https://discord.gg/KahMNDkRtK)
+[Join the Discord!](https://discord.gg/KahMNDkRtK) · [Support me on Patreon](https://www.patreon.com/Fluxee)
 
 ## Features
 
